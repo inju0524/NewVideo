@@ -1,0 +1,496 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:zhuying/src/app_store.dart';
+import 'package:zhuying/src/models.dart';
+import 'package:zhuying/src/zhuying_app.dart';
+import 'package:zhuying/src/ui/catalog_pages.dart';
+import 'package:zhuying/src/ui/detail_page.dart';
+import 'package:zhuying/src/ui/widgets.dart';
+
+void main() {
+  testWidgets('source management shows the preconfigured sources', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(body: SourcesPage(store: AppStore())),
+      ),
+    );
+
+    expect(find.text('片源管理'), findsOneWidget);
+    expect(find.text('暴风点播'), findsOneWidget);
+    expect(find.text('非凡影视'), findsOneWidget);
+    expect(find.text('量子影视'), findsOneWidget);
+  });
+
+  testWidgets('media server form keeps the API token obscured', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(body: SourcesPage(store: AppStore())),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('添加媒体服务器'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('添加媒体服务器'), findsOneWidget);
+    expect(find.text('Jellyfin'), findsOneWidget);
+    expect(find.text('Emby'), findsOneWidget);
+    final tokenField = tester.widget<TextField>(find.byType(TextField).last);
+    expect(tokenField.obscureText, isTrue);
+  });
+
+  testWidgets('mobile navigation has four tabs and groups personal pages', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = AppStore();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: AppShell(store: store),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(NavigationDestination), findsNWidgets(4));
+    expect(find.text('首页'), findsOneWidget);
+    expect(find.text('分类'), findsOneWidget);
+    expect(find.text('片源'), findsOneWidget);
+    expect(find.text('我的'), findsOneWidget);
+    expect(find.byIcon(Icons.hub_outlined), findsOneWidget);
+
+    await tester.tap(find.text('我的'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('观看历史'), findsOneWidget);
+    expect(find.text('收藏'), findsOneWidget);
+    expect(find.text('设置'), findsOneWidget);
+
+    await tester.tap(find.text('收藏'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('我的收藏'), findsOneWidget);
+    expect(find.text('还没有收藏'), findsOneWidget);
+
+    await tester.tap(find.text('历史'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('还没有观看记录'), findsOneWidget);
+
+    await tester.tap(find.text('设置').first);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('自动播放下一集'), findsOneWidget);
+    expect(find.byType(NavigationDestination), findsNWidgets(4));
+    store.dispose();
+  });
+
+  testWidgets('search opens immediately with history and returns to home', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = AppStore()
+      ..searchHistory = const ['Arrival', 'Spirited Away'];
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: AppShell(store: store),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.byType(SearchField).first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('最近搜索'), findsOneWidget);
+    expect(find.text('Arrival'), findsOneWidget);
+    expect(find.text('Spirited Away'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('删除搜索记录：Arrival'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump();
+    expect(store.searchHistory, isNot(contains('Arrival')));
+    expect(find.text('Arrival'), findsNothing);
+
+    await tester.tap(find.byTooltip('返回'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('今晚看点什么'), findsOneWidget);
+    store.dispose();
+  });
+
+  testWidgets('continue watching shows episode time and hides duplicates', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const watched = MediaItem(
+      id: 'continue-1',
+      title: 'Watched title',
+      sourceId: 'continue-source',
+      sourceName: 'Test source',
+      durationSeconds: 1800,
+      progressSeconds: 1080,
+      progressEpisodeId: 'episode-4',
+      progressEpisodeTitle: '第04集',
+    );
+    const duplicate = MediaItem(
+      id: 'continue-duplicate',
+      title: 'Watched title',
+      sourceId: 'another-source',
+      sourceName: 'Another source',
+    );
+    final store = AppStore()
+      ..catalog = const [watched, duplicate]
+      ..history = const [watched, duplicate];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: AppShell(store: store),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('第4集 · 剩余12分钟'), findsOneWidget);
+    final progress = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator).first,
+    );
+    expect(progress.value, closeTo(0.6, 0.001));
+    expect(find.textContaining('Watched'), findsOneWidget);
+
+    store.dispose();
+  });
+
+  testWidgets(
+    'search displays cached results alongside source failures and resets filters',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final goodSource = MediaSource(
+        id: 'search-good',
+        name: 'Available source',
+        endpoint: 'https://good.example/api.php/provide/vod',
+      );
+      final failedSource = MediaSource(
+        id: 'search-failed',
+        name: 'Unavailable source',
+        endpoint: 'https://failed.example/api.php/provide/vod',
+      );
+      final catalog = [
+        for (var index = 0; index < 77; index++)
+          MediaItem(
+            id: 'search-item-$index',
+            title: '猫片电影 $index',
+            sourceId: goodSource.id,
+            sourceName: goodSource.name,
+            genre: index.isEven ? '剧情' : '动作',
+          ),
+      ];
+      final store =
+          AppStore(
+              client: MockClient((request) async {
+                if (request.url.host == 'failed.example') {
+                  return http.Response('', 500);
+                }
+                return http.Response('{"list":[]}', 200);
+              }),
+            )
+            ..sources = [goodSource, failedSource]
+            ..catalog = catalog;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData.dark(),
+          home: SearchPage(store: store, initialQuery: '', onOpenItem: (_) {}),
+        ),
+      );
+      await tester.enterText(find.byType(TextField), '猫片');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 700));
+      await tester.pumpAndSettle();
+
+      expect(find.text('77 部影片'), findsOneWidget);
+      expect(find.text('部分片源连接失败，以下为当前可用的搜索结果。'), findsOneWidget);
+      expect(find.text('猫片电影 0'), findsWidgets);
+      expect(find.byType(PosterCard), findsNWidgets(36));
+      expect(find.textContaining('本地片库 77 部'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(ChoiceChip, '剧情'));
+      await tester.pump();
+      expect(find.text('39 部影片'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), '电影');
+      await tester.pump();
+      expect(find.text('77 部影片'), findsOneWidget);
+      expect(find.widgetWithText(ChoiceChip, '全部类型'), findsOneWidget);
+      expect(find.text('猫片电影 0'), findsWidgets);
+
+      store.dispose();
+    },
+  );
+
+  testWidgets('home places continue watching after the recommendation banner', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const watched = MediaItem(
+      id: 'home-watched',
+      title: 'Watched movie',
+      sourceId: 'preset-bfzy',
+      sourceName: 'Test source',
+      durationSeconds: 100,
+      progressSeconds: 40,
+    );
+    const featured = MediaItem(
+      id: 'home-featured',
+      title: 'Featured movie',
+      sourceId: 'preset-bfzy',
+      sourceName: 'Test source',
+    );
+    const recommended = MediaItem(
+      id: 'home-recommended',
+      title: 'Recommended movie',
+      sourceId: 'preset-bfzy',
+      sourceName: 'Test source',
+    );
+    final store = AppStore()
+      ..catalog = const [featured, recommended]
+      ..history = const [watched];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(
+          body: HomePage(
+            store: store,
+            onOpenItem: (_) {},
+            onHistory: () {},
+            onSearch: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final bannerY = tester.getTopLeft(find.text('Featured movie')).dy;
+    final continueY = tester.getTopLeft(find.text('接着看')).dy;
+    final recommendationsY = tester.getTopLeft(find.text('为你挑选')).dy;
+    expect(bannerY, lessThan(continueY));
+    expect(continueY, lessThan(recommendationsY));
+
+    store.dispose();
+  });
+
+  testWidgets('first home load shows placeholders instead of demo titles', (
+    tester,
+  ) async {
+    final store = AppStore();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(
+          body: HomePage(
+            store: store,
+            onOpenItem: (_) {},
+            onHistory: () {},
+            onSearch: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('home-hero-placeholder')), findsOneWidget);
+    expect(find.text('演示片单'), findsNothing);
+    expect(find.text('片源暂时没有返回影片'), findsNothing);
+    store.dispose();
+  });
+
+  testWidgets('categories show common genres and support multi-select', (
+    tester,
+  ) async {
+    final store = AppStore()
+      ..catalog = [
+        const MediaItem(
+          id: 'category-horror',
+          title: 'Horror Thriller',
+          sourceId: 'local-category',
+          sourceName: '测试片源',
+          genre: '恐怖',
+          genres: ['恐怖', '惊悚'],
+          isDemo: true,
+        ),
+        const MediaItem(
+          id: 'category-comedy',
+          title: 'Comedy',
+          sourceId: 'local-category',
+          sourceName: '测试片源',
+          genre: '喜剧',
+          genres: ['喜剧'],
+          isDemo: true,
+        ),
+        const MediaItem(
+          id: 'category-thriller',
+          title: 'Thriller',
+          sourceId: 'local-category',
+          sourceName: '测试片源',
+          genre: '惊悚',
+          genres: ['惊悚'],
+          isDemo: true,
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(
+          body: CategoriesPage(store: store, onOpenItem: (_) {}),
+        ),
+      ),
+    );
+
+    expect(find.widgetWithText(ChoiceChip, '恐怖'), findsOneWidget);
+    expect(find.widgetWithText(ChoiceChip, '伦理'), findsOneWidget);
+    expect(find.text('3 部影片'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(ChoiceChip, '恐怖'));
+    await tester.pump();
+    expect(find.text('1 部影片'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(ChoiceChip, '惊悚'));
+    await tester.pump();
+    expect(find.text('2 部影片'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(ChoiceChip, '全部'));
+    await tester.pump();
+    expect(find.text('3 部影片'), findsOneWidget);
+  });
+
+  testWidgets('player opens in a 16:9 inline layout with details below', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = AppStore()
+      ..catalog = const [
+        MediaItem(
+          id: 'player-related',
+          title: 'Related title',
+          sourceId: 'player-test',
+          sourceName: '测试线路',
+          genre: '悬疑',
+        ),
+      ];
+    const item = MediaItem(
+      id: 'player-item',
+      title: 'Player title',
+      sourceId: 'player-test',
+      sourceName: '测试线路',
+      year: '2025',
+      genre: '悬疑',
+      rating: '8.6',
+      description: '剧情简介内容',
+      episodes: [
+        MediaEpisode(title: '第01集', url: 'https://media.example/one.mp4'),
+        MediaEpisode(title: '第02集', url: 'https://media.example/two.mp4'),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: PlayerPage(
+          store: store,
+          item: item,
+          episode: item.episodes.first,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final frame = tester.getRect(find.byType(AspectRatio).first);
+    expect(frame.width, closeTo(390, 1));
+    expect(frame.height, closeTo(frame.width * 9 / 16, 1));
+    expect(find.text('Player title'), findsOneWidget);
+    expect(find.text('正在播放  ·  第01集'), findsOneWidget);
+    expect(find.text('评分 8.6'), findsOneWidget);
+    expect(find.text('收藏'), findsOneWidget);
+    expect(find.text('追剧'), findsOneWidget);
+    expect(find.text('切换线路'), findsOneWidget);
+    expect(find.text('下载'), findsOneWidget);
+    expect(find.widgetWithText(ChoiceChip, '第01集'), findsOneWidget);
+
+    await tester.tap(find.text('追剧'));
+    await tester.pump();
+    expect(find.text('已追剧'), findsOneWidget);
+    expect(store.follows, contains(item.id));
+
+    store.dispose();
+  });
+
+  testWidgets(
+    'detail poster stays as the player hero through loading and back',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final store = AppStore();
+      const item = MediaItem(
+        id: 'hero-roundtrip-item',
+        title: 'Hero roundtrip title',
+        sourceId: 'demo-source',
+        sourceName: 'Test source',
+        episodes: [MediaEpisode(title: '第01集', url: 'not-a-playback-url')],
+        isDemo: true,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData.dark(),
+          home: MediaDetailsPage(store: store, item: item),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('立即播放'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('播放地址无效，请更换片源后重试'), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (widget) => widget is Hero && widget.tag == item.id,
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byTooltip('返回'));
+      await tester.pumpAndSettle();
+      expect(find.text('Hero roundtrip title'), findsOneWidget);
+      expect(find.text('立即播放'), findsOneWidget);
+
+      store.dispose();
+    },
+  );
+}

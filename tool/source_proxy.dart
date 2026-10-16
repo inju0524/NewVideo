@@ -1,0 +1,242 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+const _defaultPort = 8124;
+const _forwardRequestHeaders = {
+  'accept',
+  'authorization',
+  'if-modified-since',
+  'if-none-match',
+  'range',
+  'referer',
+  'user-agent',
+  'x-emby-token',
+  'x-subscription',
+};
+const _hopByHopHeaders = {
+  'connection',
+  'content-encoding',
+  'content-length',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'set-cookie',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+};
+
+Future<void> main(List<String> args) async {
+  final port = _readPort(args);
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+  stdout.writeln('Source proxy listening on http://127.0.0.1:$port');
+
+  await for (final request in server) {
+    unawaited(_handle(request));
+  }
+}
+
+int _readPort(List<String> args) {
+  for (var index = 0; index + 1 < args.length; index++) {
+    if (args[index] == '--port') {
+      return int.tryParse(args[index + 1]) ?? _defaultPort;
+    }
+  }
+  return _defaultPort;
+}
+
+Future<void> _handle(HttpRequest request) async {
+  _addCorsHeaders(request.response);
+  if (request.method == 'OPTIONS') {
+    request.response.statusCode = HttpStatus.noContent;
+    await request.response.close();
+    return;
+  }
+
+  if (request.method != 'GET') {
+    await _writeError(request.response, HttpStatus.methodNotAllowed, '仅支持 GET');
+    return;
+  }
+
+  if (request.uri.path == '/health') {
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({'ok': true}));
+    await request.response.close();
+    return;
+  }
+
+  if (request.uri.path != '/proxy') {
+    await _writeError(request.response, HttpStatus.notFound, '代理路径不存在');
+    return;
+  }
+
+  final rawTarget = request.uri.queryParameters['url'];
+  if (rawTarget == null || rawTarget.length > 8192) {
+    await _writeError(request.response, HttpStatus.badRequest, '目标地址无效');
+    return;
+  }
+  final target = Uri.tryParse(rawTarget);
+  if (target == null ||
+      !{'http', 'https'}.contains(target.scheme) ||
+      target.host.isEmpty ||
+      target.userInfo.isNotEmpty ||
+      target.fragment.isNotEmpty) {
+    await _writeError(request.response, HttpStatus.badRequest, '目标地址无效');
+    return;
+  }
+
+  final client = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 12)
+    ..idleTimeout = const Duration(seconds: 30)
+    ..autoUncompress = true;
+  try {
+    final upstreamRequest = await client
+        .getUrl(target)
+        .timeout(const Duration(seconds: 12));
+    request.headers.forEach((name, values) {
+      if (_forwardRequestHeaders.contains(name.toLowerCase())) {
+        upstreamRequest.headers.set(name, values.join(', '));
+      }
+    });
+
+    final upstreamResponse = await upstreamRequest.close().timeout(
+      const Duration(seconds: 20),
+    );
+    request.response.statusCode = upstreamResponse.statusCode;
+    upstreamResponse.headers.forEach((name, values) {
+      if (!_hopByHopHeaders.contains(name.toLowerCase())) {
+        request.response.headers.set(name, values.join(', '));
+      }
+    });
+    if (_isHlsPlaylist(target, upstreamResponse)) {
+      request.response.headers.set('Cache-Control', 'no-store');
+      final body = await utf8.decoder.bind(upstreamResponse).join();
+      final rewritten = _rewriteHlsPlaylist(body, target, request);
+      request.response.headers.removeAll(HttpHeaders.contentLengthHeader);
+      request.response.headers.contentType ??= ContentType(
+        'application',
+        'vnd.apple.mpegurl',
+        charset: 'utf-8',
+      );
+      request.response.write(rewritten);
+      await request.response.close();
+    } else {
+      request.response.headers.set(
+        'Cache-Control',
+        _proxyCacheControl(request, upstreamResponse),
+      );
+      await upstreamResponse.pipe(request.response);
+    }
+  } on TimeoutException {
+    await _writeError(request.response, HttpStatus.gatewayTimeout, '源站请求超时');
+  } on SocketException {
+    await _writeError(request.response, HttpStatus.badGateway, '无法连接源站');
+  } on HttpException {
+    await _writeError(request.response, HttpStatus.badGateway, '源站响应无效');
+  } on Object {
+    await _writeError(request.response, HttpStatus.badGateway, '代理请求失败');
+  } finally {
+    client.close(force: true);
+  }
+}
+
+String _proxyCacheControl(
+  HttpRequest request,
+  HttpClientResponse upstreamResponse,
+) {
+  final mimeType = upstreamResponse.headers.contentType?.mimeType.toLowerCase();
+  final cacheControl =
+      upstreamResponse.headers
+          .value(HttpHeaders.cacheControlHeader)
+          ?.toLowerCase() ??
+      '';
+  final hasCredentials =
+      request.headers.value(HttpHeaders.authorizationHeader) != null ||
+      request.headers.value('x-emby-token') != null ||
+      request.headers.value('x-subscription') != null;
+  if (upstreamResponse.statusCode >= 200 &&
+      upstreamResponse.statusCode < 300 &&
+      mimeType?.startsWith('image/') == true &&
+      !hasCredentials &&
+      !cacheControl.contains('no-store') &&
+      !cacheControl.contains('no-cache')) {
+    return 'private, max-age=86400';
+  }
+  return 'no-store';
+}
+
+bool _isHlsPlaylist(Uri target, HttpClientResponse response) {
+  if (response.statusCode < 200 || response.statusCode >= 300) return false;
+  final path = target.path.toLowerCase();
+  if (path.endsWith('.m3u8') || path.endsWith('.m3u')) return true;
+  final mime = response.headers.contentType?.mimeType.toLowerCase() ?? '';
+  return mime == 'application/vnd.apple.mpegurl' ||
+      mime == 'application/x-mpegurl' ||
+      mime == 'audio/mpegurl' ||
+      mime == 'audio/x-mpegurl';
+}
+
+String _rewriteHlsPlaylist(String playlist, Uri source, HttpRequest request) {
+  final lines = playlist.split('\n');
+  return lines
+      .map((line) {
+        final newline = line.endsWith('\r') ? '\r' : '';
+        final content = newline.isEmpty
+            ? line
+            : line.substring(0, line.length - 1);
+        if (content.trim().isEmpty || content.trimLeft().startsWith('#')) {
+          return _rewriteHlsUriAttributes(content, source, request) + newline;
+        }
+        final resolved = source.resolve(content.trim());
+        return _proxyUri(request, resolved).toString() + newline;
+      })
+      .join('\n');
+}
+
+String _rewriteHlsUriAttributes(String line, Uri source, HttpRequest request) {
+  return line.replaceAllMapped(RegExp(r'URI="([^"]+)"'), (match) {
+    final rawUri = match.group(1)!;
+    final resolved = source.resolve(rawUri);
+    return 'URI="${_proxyUri(request, resolved)}"';
+  });
+}
+
+Uri _proxyUri(HttpRequest request, Uri target) {
+  final host = request.headers.value('host');
+  final base = host == null || host.isEmpty
+      ? Uri(
+          scheme: 'http',
+          host: '127.0.0.1',
+          port: request.connectionInfo?.localPort ?? _defaultPort,
+          path: '/proxy',
+        )
+      : Uri.parse('http://$host').replace(path: '/proxy');
+  return base.replace(queryParameters: {'url': target.toString()});
+}
+
+void _addCorsHeaders(HttpResponse response) {
+  response.headers
+    ..set('Access-Control-Allow-Origin', '*')
+    ..set('Access-Control-Allow-Methods', 'GET, OPTIONS')
+    ..set(
+      'Access-Control-Allow-Headers',
+      'Accept, Authorization, Content-Type, Range, X-Emby-Token, X-Subscription',
+    )
+    ..set(
+      'Access-Control-Expose-Headers',
+      'Accept-Ranges, Content-Length, Content-Range, Content-Type',
+    );
+}
+
+Future<void> _writeError(
+  HttpResponse response,
+  int statusCode,
+  String message,
+) async {
+  response.headers.contentType ??= ContentType.json;
+  response.statusCode = statusCode;
+  response.write(jsonEncode({'error': message}));
+  await response.close();
+}
