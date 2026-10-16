@@ -403,7 +403,11 @@ class AppStore extends ChangeNotifier {
   }
 
   Future<void> retryUnavailableSources() async {
-    if (_disposed || !hasInitialized) return;
+    if (_disposed) return;
+    if (!hasInitialized) {
+      _retryUnavailableAfterLoading = true;
+      return;
+    }
     if (isRefreshing || isLoadingMoreCatalog) {
       _retryUnavailableAfterLoading = true;
       return;

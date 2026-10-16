@@ -698,6 +698,56 @@ void main() {
     store.dispose();
   });
 
+  test(
+    'network resume before initialization retries a failed first refresh',
+    () async {
+      final source = MediaSource(
+        id: 'cms-early-resume',
+        name: 'Early resume CMS',
+        endpoint: 'https://early-resume.example/api.php/provide/vod',
+      );
+      final retryFinished = Completer<void>();
+      var requests = 0;
+      final store = AppStore(
+        client: MockClient((_) async {
+          requests++;
+          if (requests == 1) return http.Response('', 503);
+          return http.Response(
+            jsonEncode({
+              'pagecount': 1,
+              'list': [
+                {
+                  'vod_id': 'reconnected',
+                  'vod_name': 'Reconnected after startup',
+                  'vod_pic': 'https://images.example/reconnected.jpg',
+                },
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      )..sources = [source];
+      store.addListener(() {
+        if (requests == 2 &&
+            !store.isRefreshing &&
+            store.sources.single.health == SourceHealth.available &&
+            !retryFinished.isCompleted) {
+          retryFinished.complete();
+        }
+      });
+
+      await store.retryUnavailableSources();
+      await store.initialize();
+      await retryFinished.future.timeout(const Duration(seconds: 2));
+
+      expect(requests, 2);
+      expect(store.sources.single.health, SourceHealth.available);
+      expect(store.catalog.single.title, 'Reconnected after startup');
+      store.dispose();
+    },
+  );
+
   test('network resume retries a failed first source refresh', () async {
     final source = MediaSource(
       id: 'cms-resume-retry',
