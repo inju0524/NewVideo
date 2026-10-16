@@ -80,6 +80,8 @@ class AppStore extends ChangeNotifier {
   final Map<String, Map<String, Map<String, dynamic>>>
   _cmsPosterDetailsBySource = {};
   final Map<String, Set<String>> _cmsPosterDetailsAttemptedBySource = {};
+  bool _retryUnavailableAfterLoading = false;
+  bool _retryUnavailableInProgress = false;
   ({List<String> genres, String? year, String? region, String? sourceName})?
   _queuedCategoryQuery;
   int _searchGeneration = 0;
@@ -261,14 +263,29 @@ class AppStore extends ChangeNotifier {
     }
   }
 
-  Future<void> refreshSources() async {
+  Future<void> refreshSources() => _refreshSources(unavailableOnly: false);
+
+  Future<void> _refreshSources({required bool unavailableOnly}) async {
     if (isRefreshing || isLoadingMoreCatalog) return;
+    final sourcesToRefresh = enabledSources
+        .where(
+          (source) =>
+              source.kind != SourceKind.m3u &&
+              (!unavailableOnly || source.health == SourceHealth.error),
+        )
+        .toList();
+    if (sourcesToRefresh.isEmpty) return;
     isRefreshing = true;
     refreshMessage = null;
     notifyListeners();
 
-    final refreshedSourceIds = <String>{};
-    _catalogNextPage.clear();
+    final refreshedSourceIds = sourcesToRefresh
+        .map((source) => source.id)
+        .toSet();
+    _catalogNextPage.removeWhere(
+      (sourceId, _) =>
+          !unavailableOnly || refreshedSourceIds.contains(sourceId),
+    );
     final streamedItems = <String, Map<String, MediaItem>>{};
     final previousHomeSnapshot = homeSnapshot;
     void publishItems(MediaSource source, List<MediaItem> items) {
@@ -315,7 +332,7 @@ class AppStore extends ChangeNotifier {
     }
 
     final results = await _mapConcurrent(
-      enabledSources.where((source) => source.kind != SourceKind.m3u).toList(),
+      sourcesToRefresh,
       _sourceConcurrency,
       (source) => _fetchCatalog(
         source,
@@ -343,7 +360,14 @@ class AppStore extends ChangeNotifier {
       (item) => activeIds.contains(item.sourceId),
     );
     if (currentItems.isNotEmpty) {
-      catalog = _uniqueItems(currentItems);
+      catalog = _uniqueItems([
+        if (unavailableOnly)
+          ...catalog.where(
+            (item) =>
+                !item.isDemo && !refreshedSourceIds.contains(item.sourceId),
+          ),
+        ...currentItems,
+      ]);
       refreshMessage = '已载入 ${catalog.length} 部影片';
       final retainedHomeItems = previousHomeSnapshot.where(
         (item) =>
@@ -375,6 +399,35 @@ class AppStore extends ChangeNotifier {
     await _saveSources();
     notifyListeners();
     _drainQueuedCategoryQuery();
+    _runPendingUnavailableSourceRetry();
+  }
+
+  Future<void> retryUnavailableSources() async {
+    if (_disposed || !hasInitialized) return;
+    if (isRefreshing || isLoadingMoreCatalog) {
+      _retryUnavailableAfterLoading = true;
+      return;
+    }
+    if (_retryUnavailableInProgress ||
+        !enabledSources.any(
+          (source) =>
+              source.kind != SourceKind.m3u &&
+              source.health == SourceHealth.error,
+        )) {
+      return;
+    }
+    _retryUnavailableInProgress = true;
+    try {
+      await _refreshSources(unavailableOnly: true);
+    } finally {
+      _retryUnavailableInProgress = false;
+    }
+  }
+
+  void _runPendingUnavailableSourceRetry() {
+    if (!_retryUnavailableAfterLoading || _disposed) return;
+    _retryUnavailableAfterLoading = false;
+    unawaited(retryUnavailableSources());
   }
 
   Future<void> loadMoreCatalog({
@@ -448,6 +501,7 @@ class AppStore extends ChangeNotifier {
       isLoadingMoreCatalog = false;
       notifyListeners();
       _drainQueuedCategoryQuery();
+      _runPendingUnavailableSourceRetry();
     }
   }
 
@@ -637,6 +691,7 @@ class AppStore extends ChangeNotifier {
       isLoadingMoreCatalog = false;
       notifyListeners();
       _drainQueuedCategoryQuery();
+      _runPendingUnavailableSourceRetry();
     }
   }
 

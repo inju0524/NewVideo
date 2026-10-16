@@ -698,6 +698,94 @@ void main() {
     store.dispose();
   });
 
+  test('network resume retries a failed first source refresh', () async {
+    final source = MediaSource(
+      id: 'cms-resume-retry',
+      name: 'Resume retry CMS',
+      endpoint: 'https://resume.example/api.php/provide/vod',
+    );
+    final availableSource = MediaSource(
+      id: 'cms-resume-available',
+      name: 'Already available CMS',
+      endpoint: 'https://available.example/api.php/provide/vod',
+    );
+    final firstRequestStarted = Completer<void>();
+    final releaseFirstRequest = Completer<http.Response>();
+    final retryFinished = Completer<void>();
+    var failedSourceRequests = 0;
+    var availableSourceRequests = 0;
+    final store = AppStore(
+      client: MockClient((request) async {
+        if (request.url.host == 'resume.example') {
+          failedSourceRequests++;
+          if (failedSourceRequests == 1) {
+            firstRequestStarted.complete();
+            return releaseFirstRequest.future;
+          }
+          return http.Response(
+            jsonEncode({
+              'pagecount': 1,
+              'list': [
+                {
+                  'vod_id': 'reconnected',
+                  'vod_name': 'Reconnected movie',
+                  'vod_pic': 'https://images.example/reconnected.jpg',
+                },
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        availableSourceRequests++;
+        return http.Response(
+          jsonEncode({
+            'pagecount': 1,
+            'list': [
+              {
+                'vod_id': 'still-available',
+                'vod_name': 'Still available movie',
+                'vod_pic': 'https://images.example/still-available.jpg',
+              },
+            ],
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    );
+    await store.initialize(refresh: false);
+    store.sources = [source, availableSource];
+    store.addListener(() {
+      if (failedSourceRequests == 2 &&
+          !store.isRefreshing &&
+          store.sources.first.health == SourceHealth.available &&
+          !retryFinished.isCompleted) {
+        retryFinished.complete();
+      }
+    });
+
+    final initialRefresh = store.refreshSources();
+    await firstRequestStarted.future;
+    await store.retryUnavailableSources();
+    releaseFirstRequest.complete(http.Response('', 503));
+    await initialRefresh;
+    await retryFinished.future.timeout(const Duration(seconds: 2));
+
+    expect(failedSourceRequests, 2);
+    expect(availableSourceRequests, 1);
+    expect(store.sources.first.health, SourceHealth.available);
+    expect(
+      store.catalog.map((item) => item.title),
+      containsAll(['Reconnected movie', 'Still available movie']),
+    );
+
+    await store.retryUnavailableSources();
+    expect(failedSourceRequests, 2);
+    expect(availableSourceRequests, 1);
+    store.dispose();
+  });
+
   test(
     'CMS refresh replaces cached items gradually while later pages are pending',
     () async {

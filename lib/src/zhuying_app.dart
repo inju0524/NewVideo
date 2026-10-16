@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,18 +17,31 @@ class ZhuyingApp extends StatefulWidget {
   State<ZhuyingApp> createState() => _ZhuyingAppState();
 }
 
-class _ZhuyingAppState extends State<ZhuyingApp> {
+class _ZhuyingAppState extends State<ZhuyingApp> with WidgetsBindingObserver {
   late final AppStore _store;
+  Timer? _resumeRetryTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _store = AppStore();
     _store.initialize();
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    _resumeRetryTimer?.cancel();
+    _resumeRetryTimer = Timer(const Duration(milliseconds: 700), () {
+      if (mounted) unawaited(_store.retryUnavailableSources());
+    });
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _resumeRetryTimer?.cancel();
     _store.dispose();
     super.dispose();
   }
