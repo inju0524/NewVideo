@@ -31,6 +31,59 @@ void main() {
     expect(find.text('量子影视'), findsOneWidget);
   });
 
+  testWidgets(
+    'app retries failed sources after returning from a permission prompt',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      FlutterSecureStorage.setMockInitialValues({});
+      final source = MediaSource(
+        id: 'app-resume-retry',
+        name: 'Resume retry source',
+        endpoint: 'https://resume.example/api.php/provide/vod',
+      );
+      var requestCount = 0;
+      final store = AppStore(
+        client: MockClient((request) async {
+          requestCount++;
+          if (requestCount == 1) return http.Response('', 503);
+          return http.Response(
+            jsonEncode({
+              'pagecount': 1,
+              'list': [
+                {
+                  'vod_id': 'reconnected',
+                  'vod_name': 'Reconnected movie',
+                  'vod_pic': 'https://images.example/reconnected.jpg',
+                },
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      )..sources = [source];
+
+      await tester.pumpWidget(ZhuyingApp(store: store));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(store.sources.single.health, SourceHealth.error);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump(const Duration(milliseconds: 700));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(requestCount, 2);
+      expect(store.sources.single.health, SourceHealth.available);
+      expect(store.catalog.single.title, 'Reconnected movie');
+    },
+  );
+
   testWidgets('media server form keeps the API token obscured', (tester) async {
     await tester.pumpWidget(
       MaterialApp(

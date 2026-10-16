@@ -11,7 +11,9 @@ import 'ui/detail_page.dart';
 import 'ui/widgets.dart';
 
 class ZhuyingApp extends StatefulWidget {
-  const ZhuyingApp({super.key});
+  const ZhuyingApp({this.store, super.key});
+
+  final AppStore? store;
 
   @override
   State<ZhuyingApp> createState() => _ZhuyingAppState();
@@ -25,7 +27,7 @@ class _ZhuyingAppState extends State<ZhuyingApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _store = AppStore();
+    _store = widget.store ?? AppStore();
     _store.initialize();
   }
 
