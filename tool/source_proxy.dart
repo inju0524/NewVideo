@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 const _defaultPort = 8124;
 const _forwardRequestHeaders = {
@@ -27,6 +28,7 @@ const _hopByHopHeaders = {
   'transfer-encoding',
   'upgrade',
 };
+const _maxPublicConfigBytes = 2 * 1024 * 1024;
 
 Future<void> main(List<String> args) async {
   final port = _readPort(args);
@@ -86,34 +88,87 @@ Future<void> _handle(HttpRequest request) async {
     await _writeError(request.response, HttpStatus.badRequest, '目标地址无效');
     return;
   }
+  final publicConfig = request.uri.queryParameters['publicConfig'] == '1';
 
   final client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 12)
     ..idleTimeout = const Duration(seconds: 30)
     ..autoUncompress = true;
   try {
-    final upstreamRequest = await client
-        .getUrl(target)
-        .timeout(const Duration(seconds: 12));
-    request.headers.forEach((name, values) {
-      if (_forwardRequestHeaders.contains(name.toLowerCase())) {
-        upstreamRequest.headers.set(name, values.join(', '));
+    var destination = target;
+    late HttpClientResponse upstreamResponse;
+    for (var redirect = 0; redirect <= 4; redirect++) {
+      if (publicConfig && !await _isPublicDestination(destination)) {
+        await _writeError(
+          request.response,
+          HttpStatus.badRequest,
+          '只允许访问公网配置地址',
+        );
+        return;
       }
-    });
+      final upstreamRequest = await client
+          .getUrl(destination)
+          .timeout(const Duration(seconds: 12));
+      upstreamRequest.followRedirects = !publicConfig;
+      request.headers.forEach((name, values) {
+        if (_forwardRequestHeaders.contains(name.toLowerCase())) {
+          upstreamRequest.headers.set(name, values.join(', '));
+        }
+      });
 
-    final upstreamResponse = await upstreamRequest.close().timeout(
-      const Duration(seconds: 20),
-    );
+      upstreamResponse = await upstreamRequest.close().timeout(
+        const Duration(seconds: 20),
+      );
+      if (!publicConfig || !upstreamResponse.isRedirect) break;
+      final location = upstreamResponse.headers.value(
+        HttpHeaders.locationHeader,
+      );
+      if (location == null || redirect == 4) {
+        await upstreamResponse.drain<void>();
+        await _writeError(
+          request.response,
+          HttpStatus.badGateway,
+          '配置重定向次数过多或目标无效',
+        );
+        return;
+      }
+      final nextDestination = destination.resolve(location);
+      await upstreamResponse.drain<void>();
+      if (!{'http', 'https'}.contains(nextDestination.scheme) ||
+          nextDestination.userInfo.isNotEmpty ||
+          nextDestination.fragment.isNotEmpty ||
+          nextDestination.host.isEmpty) {
+        await _writeError(request.response, HttpStatus.badGateway, '配置重定向目标无效');
+        return;
+      }
+      destination = nextDestination;
+    }
+    if (publicConfig &&
+        upstreamResponse.contentLength > _maxPublicConfigBytes) {
+      await upstreamResponse.drain<void>();
+      await _writeError(
+        request.response,
+        HttpStatus.requestEntityTooLarge,
+        '配置文件超过 2 MB',
+      );
+      return;
+    }
     request.response.statusCode = upstreamResponse.statusCode;
     upstreamResponse.headers.forEach((name, values) {
-      if (!_hopByHopHeaders.contains(name.toLowerCase())) {
+      if (!_hopByHopHeaders.contains(name.toLowerCase()) &&
+          !(publicConfig && name.toLowerCase() == 'x-source-config-url')) {
         request.response.headers.set(name, values.join(', '));
       }
     });
-    if (_isHlsPlaylist(target, upstreamResponse)) {
+    if (publicConfig &&
+        upstreamResponse.statusCode >= 200 &&
+        upstreamResponse.statusCode < 300) {
+      request.response.headers.set('X-Source-Config-URL', destination);
+    }
+    if (_isHlsPlaylist(destination, upstreamResponse)) {
       request.response.headers.set('Cache-Control', 'no-store');
       final body = await utf8.decoder.bind(upstreamResponse).join();
-      final rewritten = _rewriteHlsPlaylist(body, target, request);
+      final rewritten = _rewriteHlsPlaylist(body, destination, request);
       request.response.headers.removeAll(HttpHeaders.contentLengthHeader);
       request.response.headers.contentType ??= ContentType(
         'application',
@@ -127,7 +182,25 @@ Future<void> _handle(HttpRequest request) async {
         'Cache-Control',
         _proxyCacheControl(request, upstreamResponse),
       );
-      await upstreamResponse.pipe(request.response);
+      if (publicConfig) {
+        final builder = BytesBuilder(copy: false);
+        await for (final chunk in upstreamResponse) {
+          if (builder.length + chunk.length > _maxPublicConfigBytes) {
+            request.response.headers.removeAll(HttpHeaders.contentLengthHeader);
+            request.response
+              ..statusCode = HttpStatus.requestEntityTooLarge
+              ..headers.contentType = ContentType.json
+              ..write(jsonEncode({'error': '配置文件超过 2 MB'}));
+            await request.response.close();
+            return;
+          }
+          builder.add(chunk);
+        }
+        request.response.add(builder.takeBytes());
+        await request.response.close();
+      } else {
+        await upstreamResponse.pipe(request.response);
+      }
     }
   } on TimeoutException {
     await _writeError(request.response, HttpStatus.gatewayTimeout, '源站请求超时');
@@ -140,6 +213,44 @@ Future<void> _handle(HttpRequest request) async {
   } finally {
     client.close(force: true);
   }
+}
+
+Future<bool> _isPublicDestination(Uri target) async {
+  final addresses = InternetAddress.tryParse(target.host) != null
+      ? [InternetAddress(target.host)]
+      : await InternetAddress.lookup(target.host)
+            .timeout(const Duration(seconds: 5));
+  return addresses.isNotEmpty && addresses.every(_isPublicAddress);
+}
+
+bool _isPublicAddress(InternetAddress address) {
+  final bytes = address.rawAddress;
+  if (address.type == InternetAddressType.IPv4) {
+    final first = bytes[0];
+    final second = bytes[1];
+    return first != 0 &&
+        first != 10 &&
+        first != 127 &&
+        first < 224 &&
+        !(first == 100 && second >= 64 && second <= 127) &&
+        !(first == 169 && second == 254) &&
+        !(first == 172 && second >= 16 && second <= 31) &&
+        !(first == 192 && (second == 0 || second == 168)) &&
+        !(first == 192 && second == 88 && bytes[2] == 99) &&
+        !(first == 198 && (second == 18 || second == 19 || second == 51)) &&
+        !(first == 203 && second == 0 && bytes[2] == 113);
+  }
+  if (bytes.length == 16) {
+    final first = bytes[0];
+    final second = bytes[1];
+    return first >= 0x20 &&
+        first <= 0x3f &&
+        !(first == 0x20 &&
+            second == 0x01 &&
+            bytes[2] == 0x0d &&
+            bytes[3] == 0xb8);
+  }
+  return false;
 }
 
 String _proxyCacheControl(
@@ -226,7 +337,7 @@ void _addCorsHeaders(HttpResponse response) {
     )
     ..set(
       'Access-Control-Expose-Headers',
-      'Accept-Ranges, Content-Length, Content-Range, Content-Type',
+      'Accept-Ranges, Content-Length, Content-Range, Content-Type, Location, X-Source-Config-URL',
     );
 }
 
@@ -235,8 +346,12 @@ Future<void> _writeError(
   int statusCode,
   String message,
 ) async {
-  response.headers.contentType ??= ContentType.json;
+  response.headers.contentType = ContentType(
+    'application',
+    'json',
+    charset: 'utf-8',
+  );
   response.statusCode = statusCode;
-  response.write(jsonEncode({'error': message}));
+  response.add(utf8.encode(jsonEncode({'error': message})));
   await response.close();
 }

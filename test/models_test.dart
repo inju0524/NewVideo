@@ -7,7 +7,7 @@ void main() {
         .where((source) => source.id.startsWith('public-'))
         .toList();
 
-    expect(publicSources, hasLength(7));
+    expect(publicSources, hasLength(19));
     expect(publicSources.every((source) => !source.enabled), isTrue);
     expect(
       publicSources.every(
@@ -17,7 +17,11 @@ void main() {
     );
     expect(
       publicSources.map((source) => source.name),
-      containsAll(['360点播', '百度资源', '光速资源', '樱花资源', '无尽资源']),
+      containsAll(['360点播', '百度资源', '光速资源', '猫眼资源', 'U酷资源']),
+    );
+    expect(
+      publicSources.any((source) => source.endpoint.contains('ukuapi.com/')),
+      isFalse,
     );
   });
 

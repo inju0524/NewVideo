@@ -18,6 +18,10 @@ APK 输出位置：`build/app/outputs/flutter-apk/app-release.apk`。当前 rele
 
 Windows 下额外关闭 Kotlin 增量编译，避免项目盘符与 Pub 缓存盘符不同时出现 Kotlin 缓存路径错误。版本号使用 `pubspec.yaml` 中的 `version` 字段；每次发布 Android 更新时递增 `+` 后的 build number，确保设备可识别为新版本。
 
+片源管理内置经列表响应验证的标准苹果 CMS API，新增源默认关闭，可在片源列表按需启用。也可以从仍可读取的公开 TVBox JSON/JSONC 配置仓导入标准 CMS API；仓库中的 JS/JAR 爬虫依赖 TVBox 运行环境，本项目不会执行这些脚本。多仓 `urls` 在有限请求数与配置大小内递归解析。Web 端通过受限 source proxy 读取公开配置，拒绝私网目标与危险重定向。
+
+片库、分类、搜索与首页展示按片名、年份、季数和已知内容类型合并跨源重复记录，播放器仍保留各片源的原始记录用于换线。播放界面默认支持触屏滑动与鼠标拖动预览并调节进度；居中靠右的锁定按钮可临时禁用进度手势和其他播放控件。设置中的“关于”提供作者与 GitHub 仓库链接。
+
 ## iOS 构建与真机安装
 
 没有 Mac 时，可使用 GitHub Actions 的 macOS 26 runner（Xcode 26.6 / iOS 26 SDK）。GitHub runner 只构建 GitHub 上已推送的提交，不会读取本机未提交文件；**每次构建前先检查并提交需要发布的本地改动，推送到 `main`，再确认 Actions 运行记录对应最新提交**。推送后会自动构建，也可在 GitHub 仓库 **Actions → iOS package → Run workflow** 手动触发。默认 `unsigned` 模式会运行测试并上传 `zhuying-ios-unsigned.ipa`，适用于检查构建产物；**未签名 IPA 不能安装到 iPhone**。

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app_store.dart';
 import '../models.dart';
@@ -1535,6 +1536,43 @@ class _SourcesPageState extends State<SourcesPage> {
     }
   }
 
+  Future<void> _importPublicSources() async {
+    if (_importing) return;
+    final repositories = await showDialog<List<SourceRepository>>(
+      context: context,
+      builder: (_) => const _PublicRepositoryDialog(),
+    );
+    if (repositories == null || repositories.isEmpty || !mounted) return;
+    setState(() => _importing = true);
+    try {
+      final result = await widget.store.importPublicRepositories(repositories);
+      if (!mounted) return;
+      final message =
+          StringBuffer(
+              result.sources.isEmpty
+                  ? '未发现可直接使用的 CMS 源'
+                  : '已添加 ${result.sources.length} 个 CMS 源，默认关闭',
+            )
+            ..write('；读取 ${result.fetchedConfigs} 个配置')
+            ..write('；跳过 ${result.skippedScripts} 个 JS/JAR 爬虫源')
+            ..write('；${result.failedConfigs} 个配置不可用');
+      if (result.truncated) message.write('；已达到导入数量限制');
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message.toString())));
+    } on Object catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error is FormatException ? error.message : '公开配置导入失败，请检查网络后重试',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
   Future<void> _addUrl() async {
     final nameController = TextEditingController();
     final urlController = TextEditingController();
@@ -1644,6 +1682,17 @@ class _SourcesPageState extends State<SourcesPage> {
                     onPressed: _addMediaServer,
                     icon: const Icon(Icons.storage_rounded),
                   ),
+                  IconButton(
+                    tooltip: '导入公开片源仓',
+                    onPressed: _importing ? null : _importPublicSources,
+                    icon: _importing
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.cloud_download_outlined),
+                  ),
                   FilledButton.tonalIcon(
                     onPressed: _importing ? null : _pickSource,
                     icon: _importing
@@ -1698,6 +1747,100 @@ class _SourcesPageState extends State<SourcesPage> {
             ),
         ],
       ),
+    );
+  }
+}
+
+class _PublicRepositoryDialog extends StatefulWidget {
+  const _PublicRepositoryDialog();
+
+  @override
+  State<_PublicRepositoryDialog> createState() =>
+      _PublicRepositoryDialogState();
+}
+
+class _PublicRepositoryDialogState extends State<_PublicRepositoryDialog> {
+  final Set<String> _selected = {};
+
+  @override
+  Widget build(BuildContext context) {
+    final repositories = SourceImporter.publicRepositories;
+    return AlertDialog(
+      title: const Text('导入公开片源仓'),
+      content: SizedBox(
+        width: 520,
+        height: (MediaQuery.sizeOf(context).height * 0.62)
+            .clamp(240.0, 460.0)
+            .toDouble(),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('全选'),
+              value: _selected.isEmpty
+                  ? false
+                  : _selected.length == repositories.length
+                  ? true
+                  : null,
+              tristate: true,
+              onChanged: (value) => setState(() {
+                if (value == true) {
+                  _selected
+                    ..clear()
+                    ..addAll(repositories.map((repository) => repository.url));
+                } else {
+                  _selected.clear();
+                }
+              }),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: repositories.length,
+                itemBuilder: (context, index) {
+                  final repository = repositories[index];
+                  return CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _selected.contains(repository.url),
+                    title: Text(repository.name),
+                    subtitle: Text(
+                      repository.description.isEmpty
+                          ? repository.url
+                          : '${repository.description} · ${repository.url}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    onChanged: (value) => setState(() {
+                      if (value == true) {
+                        _selected.add(repository.url);
+                      } else {
+                        _selected.remove(repository.url);
+                      }
+                    }),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _selected.isEmpty
+              ? null
+              : () => Navigator.of(context).pop([
+                  for (final repository in repositories)
+                    if (_selected.contains(repository.url)) repository,
+                ]),
+          child: Text('导入 ${_selected.length} 个'),
+        ),
+      ],
     );
   }
 }
@@ -1935,13 +2078,48 @@ class _SettingsContent extends StatelessWidget {
             ),
           ],
         ),
+        const SizedBox(height: 20),
+        _SettingGroup(
+          title: '关于',
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.movie_creation_outlined),
+              title: const Text('烛影'),
+              subtitle: const Text(
+                '作者：INJU银烛\n跨平台影视浏览与播放应用，支持标准订阅源、分类筛选和播放进度记录。',
+              ),
+              trailing: IconButton(
+                tooltip: '打开 GitHub 仓库',
+                onPressed: () => _openProjectRepository(context),
+                icon: const Icon(Icons.open_in_new_rounded),
+              ),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.code_rounded),
+              title: const Text('GitHub 项目'),
+              subtitle: const Text('github.com/inju0524/NewVideo'),
+              onTap: () => _openProjectRepository(context),
+            ),
+          ],
+        ),
         const SizedBox(height: 24),
         const Text(
-          '烛影  ·  版本 1.0.0',
+          '烛影  ·  版本 1.0.2',
           style: TextStyle(color: ZhuyingColors.muted, fontSize: 11),
         ),
       ],
     );
+  }
+
+  Future<void> _openProjectRepository(BuildContext context) async {
+    final uri = Uri.parse('https://github.com/inju0524/NewVideo');
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!opened && context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('无法打开 GitHub，请检查网络连接')));
+    }
   }
 }
 

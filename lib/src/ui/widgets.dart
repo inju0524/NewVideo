@@ -210,11 +210,12 @@ class PosterCard extends StatelessWidget {
             const SizedBox(height: 9),
             Text(
               item.title,
-              maxLines: 1,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: ZhuyingColors.text,
-                fontSize: 13,
+                fontSize: 12,
+                height: 1.18,
                 fontWeight: FontWeight.w600,
               ),
             ),

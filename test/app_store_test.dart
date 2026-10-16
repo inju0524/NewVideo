@@ -346,7 +346,8 @@ void main() {
                   for (var index = 0; index < 20; index++)
                     {
                       'vod_id': '${query['t']}-${query['pg']}-$index',
-                      'vod_name': 'Horror ${query['t']} $index',
+                      'vod_name':
+                          'Horror ${query['t']} page ${query['pg']} $index',
                       'type_name': '电影片',
                       'vod_pic': 'https://images.example/$index.jpg',
                     },
@@ -994,6 +995,13 @@ void main() {
       final variants = await store.findSourceVariants(currentItem);
 
       expect(variants.map((item) => item.sourceId), [alternate.id]);
+      expect(
+        store.sources
+            .where((source) => source.id == alternate.id)
+            .single
+            .statusMessage,
+        '1 部影片',
+      );
       store.dispose();
     },
   );
@@ -1263,6 +1271,129 @@ void main() {
         contains('public-360zy'),
       );
       expect(saved.length, defaultSources.length);
+      store.dispose();
+    },
+  );
+
+  test(
+    'initialization migrates saved public source state by endpoint',
+    () async {
+      final oldGuangsu = MediaSource(
+        id: 'public-guangsu',
+        name: '光速资源',
+        endpoint: 'https://api.guangsuapi.com/api.php/provide/vod/from/gsm3u8',
+        requiresAuth: true,
+        enabled: true,
+      );
+      final oldUku = MediaSource(
+        id: 'public-uku',
+        name: 'U酷资源',
+        endpoint: 'https://api.ukuapi.com/api.php/provide/vod/',
+        requiresAuth: true,
+        enabled: true,
+      );
+      SharedPreferences.setMockInitialValues({
+        'zhuying.sources.v1': jsonEncode([
+          oldGuangsu.toJson(),
+          oldUku.toJson(),
+        ]),
+      });
+      const storage = FlutterSecureStorage();
+      await storage.write(
+        key: 'zhuying.source.public-guangsu.headers',
+        value: jsonEncode({'X-Subscription': 'keep-me'}),
+      );
+      await storage.write(
+        key: 'zhuying.source.public-uku.headers',
+        value: jsonEncode({'X-Subscription': 'do-not-move'}),
+      );
+      final store = AppStore();
+
+      await store.initialize(refresh: false);
+
+      final guangsu = store.sources.singleWhere(
+        (source) => source.id == 'public-guangsu',
+      );
+      final uku = store.sources.singleWhere(
+        (source) => source.id == 'public-uku88',
+      );
+      expect(guangsu.enabled, isTrue);
+      expect(guangsu.endpoint, contains('api.guangsuapi.com'));
+      expect(uku.enabled, isFalse);
+      expect(uku.requiresAuth, isFalse);
+      expect(await store.requestHeaders('public-guangsu'), {
+        'X-Subscription': 'keep-me',
+      });
+      expect(await store.requestHeaders('public-uku88'), isEmpty);
+      expect(
+        await storage.read(key: 'zhuying.source.public-uku.headers'),
+        isNull,
+      );
+      store.dispose();
+    },
+  );
+
+  test(
+    'catalog de-duplicates sources by normalized title and edition',
+    () async {
+      const sourceA = 'dedup-source-a';
+      const sourceB = 'dedup-source-b';
+      const sourceC = 'dedup-source-c';
+      final store = AppStore()
+        ..sources = [
+          for (final entry in [
+            (sourceA, 'Source A'),
+            (sourceB, 'Source B'),
+            (sourceC, 'Source C'),
+          ])
+            MediaSource(
+              id: entry.$1,
+              name: entry.$2,
+              endpoint: 'https://${entry.$1}.example/api.php/provide/vod',
+            ),
+        ]
+        ..catalog = const [
+          MediaItem(
+            id: '$sourceA:1',
+            title: 'The Same Film (2020) [HD]',
+            sourceId: sourceA,
+            sourceName: 'Source A',
+          ),
+          MediaItem(
+            id: '$sourceB:2',
+            title: 'The Same Film',
+            sourceId: sourceB,
+            sourceName: 'Source B',
+            year: '2020',
+          ),
+          MediaItem(
+            id: '$sourceC:3',
+            title: 'The Same Film',
+            sourceId: sourceC,
+            sourceName: 'Source C',
+            year: '2024',
+          ),
+          MediaItem(
+            id: '$sourceC:4',
+            title: 'The Same Film 第02季',
+            sourceId: sourceC,
+            sourceName: 'Source C',
+            year: '2024',
+          ),
+          MediaItem(
+            id: '$sourceB:5',
+            title: 'The Same Film',
+            sourceId: sourceB,
+            sourceName: 'Source B',
+          ),
+        ];
+
+      expect(store.allMedia, hasLength(4));
+      expect(
+        store.allMedia.map((item) => item.id),
+        contains(anyOf('$sourceA:1', '$sourceB:2')),
+      );
+      expect(store.allMedia.map((item) => item.id), contains('$sourceB:5'));
       store.dispose();
     },
   );

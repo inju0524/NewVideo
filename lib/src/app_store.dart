@@ -88,7 +88,7 @@ class AppStore extends ChangeNotifier {
 
   List<MediaItem> get allMedia {
     final activeIds = enabledSources.map((source) => source.id).toSet();
-    return _uniqueItems(
+    return _uniqueDisplayItems(
       [
         ...catalog,
         ...localItems,
@@ -99,22 +99,15 @@ class AppStore extends ChangeNotifier {
 
   List<MediaItem> get categoryMedia {
     final activeIds = enabledSources.map((source) => source.id).toSet();
-    final merged = <String, MediaItem>{};
-    for (final item in [
-      ...catalog,
-      ...homeSnapshot,
-      ...localItems,
-      ...favoriteItems,
-      ..._categoryItemsByQuery.values.expand((items) => items.values),
-    ].where((item) => item.isDemo || activeIds.contains(item.sourceId))) {
-      final existing = merged[item.id];
-      if (existing == null) {
-        merged[item.id] = item;
-        continue;
-      }
-      merged[item.id] = _mergeMediaItem(existing, item);
-    }
-    return merged.values.toList();
+    return _uniqueDisplayItems(
+      [
+        ...catalog,
+        ...homeSnapshot,
+        ...localItems,
+        ...favoriteItems,
+        ..._categoryItemsByQuery.values.expand((items) => items.values),
+      ].where((item) => item.isDemo || activeIds.contains(item.sourceId)),
+    );
   }
 
   List<MediaSource> get enabledSources =>
@@ -158,7 +151,7 @@ class AppStore extends ChangeNotifier {
           activeSourceIds.contains(item.sourceId) &&
           !currentItemIds.contains(item.id),
     );
-    return _uniqueItems([...currentItems, ...cachedItems])
+    return _uniqueDisplayItems([...currentItems, ...cachedItems])
         .take(_maxHomeSnapshotItems)
         .toList();
   }
@@ -167,30 +160,36 @@ class AppStore extends ChangeNotifier {
     final titleKey = _sourceTitleKey(item.title);
     if (titleKey.isEmpty) return const [];
 
-    var variants = allMedia
+    final localVariants = _uniqueItems(
+      [
+        ...catalog,
+        ...homeSnapshot,
+        ...localItems,
+        ...favoriteItems,
+        ..._categoryItemsByQuery.values.expand((items) => items.values),
+      ].where((candidate) => _isMatchingVariant(candidate, item)),
+    );
+    final sourcesToSearch = enabledSources
         .where(
-          (candidate) =>
-              candidate.id != item.id &&
-              candidate.sourceId != item.sourceId &&
-              _sourceTitleKey(candidate.title) == titleKey,
+          (source) =>
+              source.kind == SourceKind.cms && source.id != item.sourceId,
         )
         .toList();
-    if (variants.isEmpty) {
-      try {
-        final results = await search(item.title);
-        variants = results
-            .where(
-              (candidate) =>
-                  candidate.id != item.id &&
-                  candidate.sourceId != item.sourceId &&
-                  _sourceTitleKey(candidate.title) == titleKey,
-            )
-            .toList();
-      } on Object {
-        // Keep the already loaded catalog available when source search fails.
-      }
-    }
-    return _uniqueItems(variants);
+    if (sourcesToSearch.isEmpty) return localVariants;
+
+    final results = await _mapConcurrent(
+      sourcesToSearch,
+      _sourceConcurrency,
+      (source) => _fetchSource(source, query: item.title, pageLimit: 1),
+    );
+    _applySourceResults({
+      for (final result in results) result.source.id: result.source,
+    });
+    notifyListeners();
+    final remoteVariants = results
+        .expand((result) => result.items)
+        .where((candidate) => _isMatchingVariant(candidate, item));
+    return _uniqueItems([...localVariants, ...remoteVariants]);
   }
 
   Future<void> initialize({bool refresh = true}) async {
@@ -202,21 +201,69 @@ class AppStore extends ChangeNotifier {
         final imported = decoded
             .map((value) => MediaSource.fromJson(value as Map<String, dynamic>))
             .toList();
-        final known = <String>{};
-        final byId = {
-          for (final source in imported)
-            if (known.add(source.id)) source.id: source,
-        };
-        final merged = <MediaSource>[
-          for (final source in defaultSources) byId.remove(source.id) ?? source,
-          ...byId.values,
-        ];
+        final unused = [...imported];
+        final merged = <MediaSource>[];
+        final retiredCredentialIds = <String>[];
+        for (final preset in defaultSources) {
+          var savedIndex = unused.indexWhere(
+            (source) =>
+                source.id == preset.id &&
+                (_sameSourceHost(source.endpoint, preset.endpoint) ||
+                    _sameSourceEndpoint(source.endpoint, preset.endpoint) ||
+                    _isLegacyEndpointFor(source, preset)),
+          );
+          if (savedIndex < 0) {
+            savedIndex = unused.indexWhere(
+              (source) =>
+                  _sameSourceEndpoint(source.endpoint, preset.endpoint) ||
+                  _isLegacyEndpointFor(source, preset),
+            );
+          }
+          final saved = savedIndex < 0 ? null : unused.removeAt(savedIndex);
+          final credentialsMatch =
+              saved != null && _sameSourceHost(saved.endpoint, preset.endpoint);
+          if (saved != null && !credentialsMatch) {
+            retiredCredentialIds.add(saved.id);
+          }
+          merged.add(
+            MediaSource(
+              id: credentialsMatch ? saved.id : preset.id,
+              name: preset.name,
+              endpoint: preset.endpoint,
+              kind: preset.kind,
+              requiresAuth: credentialsMatch
+                  ? saved.requiresAuth
+                  : preset.requiresAuth,
+              enabled: credentialsMatch ? saved.enabled : preset.enabled,
+              health: SourceHealth.pending,
+              statusMessage: preset.statusMessage,
+            ),
+          );
+        }
+        final retired = unused
+            .where(_isRetiredDefaultSource)
+            .map((source) => source.id)
+            .toList();
+        for (final source in unused.where(
+          (source) => !_isRetiredDefaultSource(source),
+        )) {
+          if (merged.any(
+            (existing) =>
+                existing.id == source.id ||
+                _sameSourceEndpoint(existing.endpoint, source.endpoint),
+          )) {
+            continue;
+          }
+          merged.add(source);
+        }
         sources = merged;
-
-        // Older installs only have the original preset IDs persisted. Write
-        // the merged list back so newly published defaults become visible
-        // without discarding the user's enabled state or custom sources.
-        if (merged.length != imported.length) await _saveSources();
+        for (final sourceId in retired) {
+          await _secureStorage.delete(key: _headersKey(sourceId));
+        }
+        for (final sourceId in retiredCredentialIds) {
+          await _secureStorage.delete(key: _headersKey(sourceId));
+        }
+        await _saveSources();
       } on Object {
         sources = defaultSources;
       }
@@ -790,7 +837,9 @@ class AppStore extends ChangeNotifier {
       }).toList(),
     );
     if (!remote) {
-      final matches = localMatches.take(_maxSearchResults).toList();
+      final matches = _uniqueDisplayItems(localMatches)
+          .take(_maxSearchResults)
+          .toList();
       onCounts?.call(
         SearchCounts(localMatches: localMatches.length, remoteMatches: 0),
       );
@@ -799,7 +848,7 @@ class AppStore extends ChangeNotifier {
     }
     final streamedItems = <String, List<MediaItem>>{};
     void publishResults() {
-      final combined = _uniqueItems([
+      final combined = _uniqueDisplayItems([
         ...localMatches,
         ...streamedItems.values.expand((items) => items),
       ]);
@@ -849,7 +898,7 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
     final activeIds = enabledSources.map((source) => source.id).toSet();
     final localIds = localMatches.map((item) => item.id).toSet();
-    final finalResults = _uniqueItems([
+    final finalResults = _uniqueDisplayItems([
       ...localMatches,
       ...results
           .expand((result) => result.items)
@@ -952,7 +1001,7 @@ class AppStore extends ChangeNotifier {
     final merged = [...sources];
     for (final incoming in result.sources) {
       final existingIndex = merged.indexWhere(
-        (source) => source.endpoint == incoming.endpoint,
+        (source) => _sameSourceEndpoint(source.endpoint, incoming.endpoint),
       );
       final id = existingIndex < 0 ? incoming.id : merged[existingIndex].id;
       final headers = result.headersBySourceId[incoming.id];
@@ -972,6 +1021,25 @@ class AppStore extends ChangeNotifier {
     await _saveSources();
     await _saveLocalItems();
     notifyListeners();
+  }
+
+  Future<RemoteSourceImportResult> importPublicRepositories(
+    Iterable<SourceRepository> repositories,
+  ) async {
+    final result = await const SourceImporter().importRepositories(
+      repositories,
+      client: _client,
+      webProxyEndpoint: _useWebProxy ? _webProxyEndpoint : null,
+    );
+    if (result.sources.isNotEmpty) {
+      await addImport(
+        SourceImportResult(
+          sources: result.sources,
+          headersBySourceId: result.headersBySourceId,
+        ),
+      );
+    }
+    return result;
   }
 
   Future<void> removeSource(String id) async {
@@ -1976,13 +2044,29 @@ class AppStore extends ChangeNotifier {
     }
     final title = row['vod_name'] ?? row['name'] ?? row['title'];
     if (title != null && title.toString().trim().isNotEmpty) {
-      return 'title:${_sourceTitleKey(title.toString())}';
+      return 'title:${_sourceTitleKey(title.toString())}|year:${_effectiveYear(title.toString(), (row['vod_year'] ?? row['year'])?.toString() ?? '')}';
     }
     return null;
   }
 
   static String _sourceTitleKey(String title) {
     var value = title.trim().toLowerCase();
+    final titleYear = RegExp(r'(?<!\d)(?:19|20)\d{2}(?!\d)').firstMatch(value);
+    if (titleYear != null) {
+      value = value.replaceRange(titleYear.start, titleYear.end, '');
+    }
+    final seasonMatch = RegExp(
+      r'第\s*0*(\d+)\s*(?:季|部|篇)|season\s*0*(\d+)|s0*(\d+)',
+      caseSensitive: false,
+    ).firstMatch(value);
+    final season =
+        seasonMatch?.group(1) ??
+        seasonMatch?.group(2) ??
+        seasonMatch?.group(3) ??
+        '0';
+    if (seasonMatch != null) {
+      value = value.replaceRange(seasonMatch.start, seasonMatch.end, '');
+    }
     for (final pattern in [
       RegExp(r'\[[^\]]*\]'),
       RegExp(r'【[^】]*】'),
@@ -1991,11 +2075,144 @@ class AppStore extends ChangeNotifier {
     ]) {
       value = value.replaceAll(pattern, '');
     }
-    value = value.replaceFirst(
-      RegExp(r'(第?\d+(?:季|部|篇)|season\s*\d+|s\d+)$'),
+    value = value.replaceAll(
+      RegExp(r'\b(?:4k|8k|1080p|720p|hd|uhd)\b', caseSensitive: false),
       '',
     );
-    return value.replaceAll(RegExp(r'''[\s.,!?，。！？：:；;、/\\|_+&·•\-'" ]'''), '');
+    final titleKey = value.replaceAll(
+      RegExp(r'''[\s.,!?，。！？：:；;、/\\|_+&·•\-'" ]'''),
+      '',
+    );
+    if (titleKey.isEmpty) return '';
+    return '$titleKey|season:$season';
+  }
+
+  static String _effectiveYear(String title, String year) {
+    if (year.trim().isNotEmpty) return year.trim();
+    return RegExp(r'(?<!\d)(?:19|20)\d{2}(?!\d)').firstMatch(title)?.group(0) ??
+        '';
+  }
+
+  static bool _isMatchingVariant(MediaItem candidate, MediaItem original) {
+    if (candidate.id == original.id ||
+        candidate.sourceId == original.sourceId ||
+        _sourceTitleKey(candidate.title) != _sourceTitleKey(original.title)) {
+      return false;
+    }
+    final candidateYear = _effectiveYear(candidate.title, candidate.year);
+    final originalYear = _effectiveYear(original.title, original.year);
+    if (candidateYear.isNotEmpty &&
+        originalYear.isNotEmpty &&
+        candidateYear != originalYear) {
+      return false;
+    }
+    return candidate.contentType == MediaContentType.unknown ||
+        original.contentType == MediaContentType.unknown ||
+        candidate.contentType == original.contentType;
+  }
+
+  static bool _isLegacyEndpointFor(MediaSource saved, MediaSource preset) {
+    final savedUri = Uri.tryParse(saved.endpoint);
+    if (savedUri == null) return false;
+    return (saved.id == 'public-guangsu' &&
+            preset.id == 'public-guangsu' &&
+            savedUri.host == 'api.guangsuapi.com') ||
+        (saved.id == 'public-xinlang' &&
+            preset.id == 'public-xinlang' &&
+            savedUri.host == 'api.xinlangapi.com') ||
+        (saved.id == 'public-uku' &&
+            preset.id == 'public-uku88' &&
+            savedUri.host == 'api.ukuapi.com');
+  }
+
+  static bool _isRetiredDefaultSource(MediaSource source) =>
+      const {'public-yhzy', 'public-wujin', 'public-uku'}.contains(source.id);
+
+  static bool _sameSourceEndpoint(String first, String second) {
+    final firstUri = Uri.tryParse(first);
+    final secondUri = Uri.tryParse(second);
+    if (firstUri == null || secondUri == null) return false;
+    String key(Uri uri) {
+      final path = uri.path.replaceFirst(RegExp(r'/+$'), '');
+      final query = Map<String, String>.from(uri.queryParameters)..remove('ac');
+      return uri
+          .replace(
+            path: path,
+            query: query.isEmpty ? '' : null,
+            queryParameters: query.isEmpty ? null : query,
+          )
+          .toString();
+    }
+
+    return key(firstUri) == key(secondUri);
+  }
+
+  static bool _sameSourceHost(String first, String second) {
+    final firstUri = Uri.tryParse(first);
+    final secondUri = Uri.tryParse(second);
+    return firstUri != null &&
+        secondUri != null &&
+        firstUri.scheme == secondUri.scheme &&
+        firstUri.host == secondUri.host &&
+        firstUri.port == secondUri.port;
+  }
+
+  List<MediaItem> _uniqueDisplayItems(Iterable<MediaItem> items) {
+    final byTitle = <String, List<MediaItem>>{};
+    for (final item in items) {
+      final titleKey = _sourceTitleKey(item.title);
+      byTitle
+          .putIfAbsent(titleKey.isEmpty ? 'id:${item.id}' : titleKey, () => [])
+          .add(item);
+    }
+
+    final unique = <MediaItem>[];
+    for (final titleItems in byTitle.values) {
+      final byYear = <String, List<MediaItem>>{};
+      for (final item in titleItems) {
+        byYear
+            .putIfAbsent(_effectiveYear(item.title, item.year), () => [])
+            .add(item);
+      }
+      final unknownYear = byYear.remove('');
+      if (unknownYear != null) {
+        if (byYear.length == 1) {
+          byYear.values.single.addAll(unknownYear);
+        } else {
+          byYear[''] = unknownYear;
+        }
+      }
+
+      for (final yearItems in byYear.values) {
+        final byType = <MediaContentType, List<MediaItem>>{};
+        for (final item in yearItems) {
+          byType.putIfAbsent(item.contentType, () => []).add(item);
+        }
+        final unknownType = byType.remove(MediaContentType.unknown);
+        if (unknownType != null) {
+          if (byType.length == 1) {
+            byType.values.single.addAll(unknownType);
+          } else {
+            byType[MediaContentType.unknown] = unknownType;
+          }
+        }
+
+        for (final compatibleItems in byType.values) {
+          var preferred = compatibleItems.first;
+          for (final item in compatibleItems.skip(1)) {
+            final incomingIsPreferred =
+                (favorites.contains(item.id) || follows.contains(item.id)) &&
+                !favorites.contains(preferred.id) &&
+                !follows.contains(preferred.id);
+            preferred = incomingIsPreferred
+                ? _mergeMediaItem(item, preferred)
+                : _mergeMediaItem(preferred, item);
+          }
+          unique.add(preferred);
+        }
+      }
+    }
+    return unique;
   }
 
   static List<MediaItem> _uniqueItems(Iterable<MediaItem> items) {

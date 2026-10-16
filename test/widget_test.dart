@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -7,6 +9,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:video_player/video_player.dart';
+import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 import 'package:zhuying/src/app_store.dart';
 import 'package:zhuying/src/models.dart';
 import 'package:zhuying/src/zhuying_app.dart';
@@ -29,6 +33,38 @@ void main() {
     expect(find.text('暴风点播'), findsOneWidget);
     expect(find.text('非凡影视'), findsOneWidget);
     expect(find.text('量子影视'), findsOneWidget);
+  });
+
+  testWidgets('public repository picker only exposes importable repositories', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = AppStore();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(body: SourcesPage(store: store)),
+      ),
+    );
+    await tester.tap(find.byTooltip('导入公开片源仓'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('导入公开片源仓'), findsOneWidget);
+    expect(find.text('哈基米'), findsOneWidget);
+    expect(find.text('分享'), findsOneWidget);
+    expect(find.text('饭太硬'), findsNothing);
+    expect(find.text('全选'), findsOneWidget);
+    expect(find.text('导入 0 个'), findsOneWidget);
+    await tester.tap(find.text('哈基米'));
+    await tester.pump();
+    expect(find.text('导入 1 个'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    store.dispose();
   });
 
   testWidgets(
@@ -68,11 +104,11 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       expect(store.sources.single.health, SourceHealth.error);
 
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pump(const Duration(milliseconds: 700));
       await tester.pump();
@@ -144,6 +180,9 @@ void main() {
     await tester.tap(find.text('设置').first);
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('自动播放下一集'), findsOneWidget);
+    await tester.ensureVisible(find.textContaining('作者：INJU银烛'));
+    expect(find.textContaining('作者：INJU银烛'), findsOneWidget);
+    expect(find.text('github.com/inju0524/NewVideo'), findsOneWidget);
     expect(find.byType(NavigationDestination), findsNWidgets(4));
     store.dispose();
   });
@@ -843,6 +882,173 @@ void main() {
     store.dispose();
   });
 
+  testWidgets('player seeking and lock work with touch and mouse', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final originalPlatform = VideoPlayerPlatform.instance;
+    final fakePlatform = _SeekTestVideoPlatform();
+    VideoPlayerPlatform.instance = fakePlatform;
+    addTearDown(() => VideoPlayerPlatform.instance = originalPlatform);
+
+    final store = AppStore();
+    const item = MediaItem(
+      id: 'seek-lock-player',
+      title: 'Seek lock player',
+      sourceId: 'seek-source',
+      sourceName: 'Test source',
+      episodes: [
+        MediaEpisode(title: '第01集', url: 'https://example.com/video.mp4'),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: PlayerPage(
+          store: store,
+          item: item,
+          episode: item.episodes.first,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    Future<void> dragPlayer({
+      PointerDeviceKind kind = PointerDeviceKind.touch,
+    }) async {
+      final gesture = await tester.startGesture(
+        const Offset(100, 100),
+        kind: kind,
+      );
+      await gesture.moveBy(const Offset(100, 0));
+      await gesture.up();
+      if (kind == PointerDeviceKind.mouse) await gesture.removePointer();
+    }
+
+    await dragPlayer();
+    await tester.pump();
+    expect(fakePlatform.seekPositions, hasLength(1));
+
+    await dragPlayer(kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    expect(fakePlatform.seekPositions, hasLength(2));
+
+    final hover = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+      buttons: 0,
+    );
+    await hover.addPointer(location: const Offset(100, 100));
+    await hover.moveBy(const Offset(100, 0));
+    await hover.removePointer();
+    await tester.pump();
+    expect(fakePlatform.seekPositions, hasLength(2));
+
+    final videoRect = tester.getRect(find.byType(VideoPlayer));
+    final lockFinder = find.byKey(const ValueKey('player-seek-lock'));
+    final lockRect = tester.getRect(lockFinder);
+    expect(lockRect.center.dy, closeTo(videoRect.center.dy, 1));
+    expect(videoRect.right - lockRect.right, closeTo(40, 1));
+    expect(
+      tester.getCenter(find.byIcon(Icons.lock_open_rounded)),
+      lockRect.center,
+    );
+    expect(
+      tester
+          .widget<Material>(
+            find
+                .ancestor(of: lockFinder, matching: find.byType(Material))
+                .first,
+          )
+          .color,
+      const Color.fromRGBO(0, 0, 0, 0.84),
+    );
+
+    await tester.tap(find.byTooltip('锁定滑动调节进度'));
+    await tester.pump();
+    expect(find.byTooltip('解锁滑动调节进度'), findsOneWidget);
+    expect(
+      tester
+          .widget<AbsorbPointer>(
+            find.byKey(const ValueKey('player-locked-control-bar')),
+          )
+          .absorbing,
+      isTrue,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('player-locked-control-bar')),
+        matching: find.byType(ColorFiltered),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byTooltip('快退 10 秒'), warnIfMissed: false);
+    await tester.pump();
+    expect(fakePlatform.seekPositions, hasLength(2));
+
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(
+      tester
+          .widget<AnimatedOpacity>(
+            find.byKey(const ValueKey('player-controls-opacity')),
+          )
+          .opacity,
+      0,
+    );
+
+    await dragPlayer();
+    await tester.pump();
+    await dragPlayer(kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    expect(fakePlatform.seekPositions, hasLength(2));
+
+    await tester.tapAt(videoRect.center);
+    await tester.pump();
+    expect(
+      tester
+          .widget<AnimatedOpacity>(
+            find.byKey(const ValueKey('player-controls-opacity')),
+          )
+          .opacity,
+      1,
+    );
+
+    await tester.tap(find.byTooltip('解锁滑动调节进度'));
+    await tester.pump();
+    await dragPlayer();
+    await tester.pump();
+    expect(fakePlatform.seekPositions, hasLength(3));
+
+    await tester.tap(find.byTooltip('暂停'));
+    await tester.pump();
+    final playCallsBeforeLockedTap = fakePlatform.playCalls;
+    await tester.tap(find.byTooltip('锁定滑动调节进度'));
+    await tester.pump();
+    expect(
+      tester
+          .widget<AbsorbPointer>(
+            find.byKey(const ValueKey('player-locked-center-play')),
+          )
+          .absorbing,
+      isTrue,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('player-locked-center-play')),
+      warnIfMissed: false,
+    );
+    await tester.pump();
+    expect(fakePlatform.playCalls, playCallsBeforeLockedTap);
+
+    store.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets(
     'detail poster stays as the player hero through loading and back',
     (tester) async {
@@ -887,4 +1093,66 @@ void main() {
       store.dispose();
     },
   );
+}
+
+class _SeekTestVideoPlatform extends VideoPlayerPlatform {
+  int _nextPlayerId = 0;
+  final Map<int, StreamController<VideoEvent>> _events = {};
+  final List<Duration> seekPositions = [];
+  int playCalls = 0;
+
+  @override
+  Future<void> init() async {}
+
+  @override
+  Future<int?> createWithOptions(VideoCreationOptions options) async {
+    final playerId = _nextPlayerId++;
+    final events = StreamController<VideoEvent>();
+    _events[playerId] = events;
+    events.add(
+      VideoEvent(
+        eventType: VideoEventType.initialized,
+        duration: const Duration(minutes: 20),
+        size: const Size(1920, 1080),
+      ),
+    );
+    return playerId;
+  }
+
+  @override
+  Stream<VideoEvent> videoEventsFor(int playerId) => _events[playerId]!.stream;
+
+  @override
+  Future<void> setLooping(int playerId, bool looping) async {}
+
+  @override
+  Future<void> setVolume(int playerId, double volume) async {}
+
+  @override
+  Future<void> setPlaybackSpeed(int playerId, double speed) async {}
+
+  @override
+  Future<void> play(int playerId) async {
+    playCalls++;
+  }
+
+  @override
+  Future<void> pause(int playerId) async {}
+
+  @override
+  Future<void> seekTo(int playerId, Duration position) async {
+    seekPositions.add(position);
+  }
+
+  @override
+  Future<Duration> getPosition(int playerId) async => Duration.zero;
+
+  @override
+  Future<void> dispose(int playerId) async {
+    await _events.remove(playerId)?.close();
+  }
+
+  @override
+  Widget buildViewWithOptions(VideoViewOptions options) =>
+      const ColoredBox(color: Colors.black);
 }

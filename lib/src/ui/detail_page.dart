@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
@@ -1111,9 +1112,19 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       final nextIndex = details.episodes.indexWhere(
         (episode) => episode.title == _episode.title,
       );
+      final selectedIndex = nextIndex < 0 ? 0 : nextIndex;
+      final currentValue = _controller?.value;
+      final positionSeconds = currentValue?.position.inSeconds ?? 0;
+      final durationSeconds = currentValue?.duration.inSeconds ?? 0;
       _saveProgress();
-      _playItem = details;
-      await _replaceController(nextIndex < 0 ? 0 : nextIndex);
+      final nextEpisode = details.episodes[selectedIndex];
+      _playItem = details.copyWith(
+        progressSeconds: positionSeconds,
+        durationSeconds: durationSeconds,
+        progressEpisodeId: nextEpisode.progressKey,
+        progressEpisodeTitle: nextEpisode.title,
+      );
+      await _replaceController(selectedIndex);
     } on SourceRequestException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -1315,9 +1326,42 @@ class _PlayerSurface extends StatefulWidget {
 }
 
 class _PlayerSurfaceState extends State<_PlayerSurface> {
+  static const _seekLockButtonSize = 40.0;
+  static const _controlBackgroundColor = Color.fromRGBO(0, 0, 0, 0.84);
+  static const _grayscaleMatrix = <double>[
+    0.2126,
+    0.7152,
+    0.0722,
+    0,
+    0,
+    0.2126,
+    0.7152,
+    0.0722,
+    0,
+    0,
+    0.2126,
+    0.7152,
+    0.0722,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+  ];
+
   Timer? _hideTimer;
   bool _controlsVisible = true;
+  bool _seekLocked = false;
+  bool _draggingSeek = false;
+  int? _seekPointer;
   double _lastVolume = 1;
+  double _dragStartX = 0;
+  double _dragStartY = 0;
+  double _dragStartPositionSeconds = 0;
+  double _previewPositionSeconds = 0;
+  double _gestureWidth = 1;
 
   VideoPlayerController get controller => widget.controller;
 
@@ -1334,6 +1378,8 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.removeListener(_onControllerChanged);
       controller.addListener(_onControllerChanged);
+      _draggingSeek = false;
+      _seekPointer = null;
       _controlsVisible = true;
       _scheduleHide();
     }
@@ -1405,6 +1451,103 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
         : target;
     _showControls();
     await controller.seekTo(clamped);
+  }
+
+  void _handlePointerDown(PointerDownEvent event) {
+    if (_seekLocked ||
+        event.kind == PointerDeviceKind.mouse &&
+            event.buttons & kPrimaryButton == 0) {
+      return;
+    }
+    final value = controller.value;
+    if (!value.isInitialized || value.duration <= Duration.zero) return;
+    _seekPointer = event.pointer;
+    _dragStartX = event.position.dx;
+    _dragStartY = event.position.dy;
+    _dragStartPositionSeconds = value.position.inMilliseconds / 1000;
+    _previewPositionSeconds = _dragStartPositionSeconds;
+    _draggingSeek = false;
+  }
+
+  void _handlePointerMove(PointerMoveEvent event) {
+    if (_seekLocked || event.pointer != _seekPointer) return;
+    if (event.kind == PointerDeviceKind.mouse &&
+        event.buttons & kPrimaryButton == 0) {
+      _seekPointer = null;
+      _draggingSeek = false;
+      return;
+    }
+    final deltaX = event.position.dx - _dragStartX;
+    final deltaY = event.position.dy - _dragStartY;
+    if (!_draggingSeek) {
+      if (deltaX.abs() < 12 || deltaX.abs() <= deltaY.abs() * 1.15) return;
+      _draggingSeek = true;
+      _showControls();
+    }
+    final maxSeconds = controller.value.duration.inMilliseconds / 1000;
+    setState(() {
+      _previewPositionSeconds = horizontalSeekPosition(
+        positionSeconds: _dragStartPositionSeconds,
+        durationSeconds: maxSeconds,
+        deltaX: deltaX,
+        playerWidth: _gestureWidth,
+      );
+    });
+  }
+
+  Future<void> _handlePointerUp(PointerEvent event) async {
+    if (event.pointer != _seekPointer) return;
+    _seekPointer = null;
+    if (!_draggingSeek || _seekLocked) {
+      _draggingSeek = false;
+      return;
+    }
+    final target = Duration(
+      milliseconds: (_previewPositionSeconds * 1000).round(),
+    );
+    _draggingSeek = false;
+    if (mounted) setState(() {});
+    if (!mounted || !controller.value.isInitialized) return;
+    await controller.seekTo(target);
+    _scheduleHide();
+  }
+
+  void _handlePointerCancel(PointerCancelEvent event) {
+    if (event.pointer != _seekPointer) return;
+    _seekPointer = null;
+    if (!_draggingSeek) return;
+    _draggingSeek = false;
+    if (mounted) setState(() {});
+  }
+
+  void _toggleSeekLock() {
+    setState(() => _seekLocked = !_seekLocked);
+    if (_seekLocked) _draggingSeek = false;
+    _seekPointer = null;
+    _showControls();
+  }
+
+  String _formatSeekPreview() {
+    final duration = Duration(
+      milliseconds: (_previewPositionSeconds * 1000).round(),
+    );
+    return '${_formatTime(duration)} / ${_formatTime(controller.value.duration)}';
+  }
+
+  Widget _lockedControls(Widget child, {required Key key}) {
+    return AbsorbPointer(
+      key: key,
+      absorbing: _seekLocked,
+      child: _seekLocked
+          ? Opacity(
+              opacity: 0.48,
+              child: ColorFiltered(
+                colorFilter: const ColorFilter.matrix(_grayscaleMatrix),
+                child: child,
+              ),
+            )
+          : child,
+    );
   }
 
   Future<void> _toggleMute() async {
@@ -1544,77 +1687,160 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
       builder: (context, value, _) => LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 560;
+          _gestureWidth = constraints.maxWidth;
           return Stack(
             fit: StackFit.expand,
             children: [
               VideoPlayer(controller),
               Positioned.fill(
-                child: GestureDetector(
+                child: Listener(
                   behavior: HitTestBehavior.opaque,
-                  onTap: _toggleControls,
-                  child: const SizedBox.expand(),
+                  onPointerDown: _handlePointerDown,
+                  onPointerMove: _handlePointerMove,
+                  onPointerUp: _handlePointerUp,
+                  onPointerCancel: _handlePointerCancel,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _toggleControls,
+                    child: const SizedBox.expand(),
+                  ),
                 ),
               ),
               AnimatedOpacity(
+                key: const ValueKey('player-controls-opacity'),
                 opacity: _controlsVisible ? 1 : 0,
                 duration: const Duration(milliseconds: 180),
                 child: IgnorePointer(
                   ignoring: !_controlsVisible,
-                  child: Column(
+                  child: Stack(
+                    fit: StackFit.expand,
                     children: [
-                      SafeArea(
-                        left: widget.isFullscreen,
-                        top: widget.isFullscreen,
-                        right: widget.isFullscreen,
-                        bottom: false,
-                        child: _topOverlay(),
-                      ),
-                      const Spacer(),
-                      SafeArea(
-                        left: widget.isFullscreen,
-                        top: false,
-                        right: widget.isFullscreen,
-                        bottom: widget.isFullscreen,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
+                      Column(
+                        children: [
+                          SafeArea(
+                            left: widget.isFullscreen,
+                            top: widget.isFullscreen,
+                            right: widget.isFullscreen,
+                            bottom: false,
+                            child: _topOverlay(),
+                          ),
+                          const Spacer(),
+                          SafeArea(
+                            left: widget.isFullscreen,
+                            top: false,
+                            right: widget.isFullscreen,
+                            bottom: widget.isFullscreen,
+                            child: _lockedControls(
+                              Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                    ),
+                                    child: VideoProgressIndicator(
+                                      controller,
+                                      allowScrubbing: true,
+                                      colors: const VideoProgressColors(
+                                        playedColor: ZhuyingColors.amber,
+                                        bufferedColor: Colors.white38,
+                                        backgroundColor: Colors.white12,
+                                      ),
+                                      padding: const EdgeInsets.only(
+                                        top: 5,
+                                        bottom: 5,
+                                      ),
+                                    ),
+                                  ),
+                                  compact
+                                      ? _compactBar(value)
+                                      : _wideBar(value),
+                                ],
                               ),
-                              child: VideoProgressIndicator(
-                                controller,
-                                allowScrubbing: true,
-                                colors: const VideoProgressColors(
-                                  playedColor: ZhuyingColors.amber,
-                                  bufferedColor: Colors.white38,
-                                  backgroundColor: Colors.white12,
+                              key: const ValueKey('player-locked-control-bar'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (!value.isPlaying && !value.isBuffering)
+                        Center(
+                          child: _lockedControls(
+                            Material(
+                              color: Colors.black.withValues(alpha: 0.55),
+                              shape: const CircleBorder(),
+                              child: IconButton(
+                                tooltip: '播放',
+                                onPressed: _togglePlayback,
+                                color: ZhuyingColors.amber,
+                                iconSize: 38,
+                                icon: const Icon(Icons.play_arrow_rounded),
+                              ),
+                            ),
+                            key: const ValueKey('player-locked-center-play'),
+                          ),
+                        ),
+                      Positioned(
+                        top: 0,
+                        bottom: 0,
+                        right: _seekLockButtonSize,
+                        child: Center(
+                          child: Material(
+                            color: _controlBackgroundColor,
+                            shape: const CircleBorder(),
+                            child: SizedBox.square(
+                              dimension: _seekLockButtonSize,
+                              child: IconButton(
+                                key: const ValueKey('player-seek-lock'),
+                                tooltip: _seekLocked ? '解锁滑动调节进度' : '锁定滑动调节进度',
+                                onPressed: _toggleSeekLock,
+                                color: _seekLocked
+                                    ? ZhuyingColors.amber
+                                    : Colors.white,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: _seekLockButtonSize,
+                                  height: _seekLockButtonSize,
                                 ),
-                                padding: const EdgeInsets.only(
-                                  top: 5,
-                                  bottom: 5,
+                                padding: EdgeInsets.zero,
+                                alignment: Alignment.center,
+                                icon: Icon(
+                                  _seekLocked
+                                      ? Icons.lock_rounded
+                                      : Icons.lock_open_rounded,
+                                  size: 18,
                                 ),
                               ),
                             ),
-                            compact ? _compactBar(value) : _wideBar(value),
-                          ],
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
               ),
-              if (!value.isPlaying && !value.isBuffering)
-                Center(
-                  child: Material(
-                    color: Colors.black.withValues(alpha: 0.55),
-                    shape: const CircleBorder(),
-                    child: IconButton(
-                      tooltip: '播放',
-                      onPressed: _togglePlayback,
-                      color: ZhuyingColors.amber,
-                      iconSize: 38,
-                      icon: const Icon(Icons.play_arrow_rounded),
+              if (_draggingSeek)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Center(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.72),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                          child: Text(
+                            _formatSeekPreview(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -1668,7 +1894,7 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
   Widget _topOverlay() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(14, 10, 8, 24),
+      padding: const EdgeInsets.fromLTRB(14, 10, 48, 24),
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
@@ -1703,7 +1929,7 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
 
   Widget _wideBar(VideoPlayerValue value) {
     return Container(
-      color: Colors.black.withValues(alpha: 0.82),
+      color: _controlBackgroundColor,
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Row(
         children: [
@@ -1758,7 +1984,7 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
 
   Widget _compactBar(VideoPlayerValue value) {
     return Container(
-      color: Colors.black.withValues(alpha: 0.84),
+      color: _controlBackgroundColor,
       padding: const EdgeInsets.fromLTRB(4, 0, 4, 3),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -1812,6 +2038,8 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
       icon: const Icon(Icons.more_horiz_rounded),
       onSelected: (action) {
         switch (action) {
+          case 'seek-lock':
+            _toggleSeekLock();
           case 'previous':
             widget.onPrevious?.call();
           case 'next':
@@ -1828,6 +2056,11 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
         }
       },
       itemBuilder: (context) => [
+        PopupMenuItem<String>(
+          value: 'seek-lock',
+          child: Text(_seekLocked ? '解锁滑动调节进度' : '锁定滑动调节进度'),
+        ),
+        const PopupMenuDivider(),
         if (widget.onPrevious != null)
           const PopupMenuItem<String>(value: 'previous', child: Text('上一集')),
         if (widget.onNext != null)
@@ -2446,6 +2679,18 @@ class _PlayerError extends StatelessWidget {
       ),
     );
   }
+}
+
+double horizontalSeekPosition({
+  required double positionSeconds,
+  required double durationSeconds,
+  required double deltaX,
+  required double playerWidth,
+}) {
+  if (durationSeconds <= 0 || playerWidth <= 0) return 0;
+  return (positionSeconds + deltaX / playerWidth * durationSeconds)
+      .clamp(0, durationSeconds)
+      .toDouble();
 }
 
 String _formatTime(Duration duration) {
