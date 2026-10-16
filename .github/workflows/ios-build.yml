@@ -1,0 +1,191 @@
+name: iOS package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ios-build.yml'
+      - 'ios/**'
+      - 'lib/**'
+      - 'test/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+  workflow_dispatch:
+    inputs:
+      signing:
+        description: 'Unsigned build for inspection, or Ad Hoc for registered devices'
+        required: true
+        type: choice
+        default: unsigned
+        options:
+          - unsigned
+          - adhoc
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      FLUTTER_VERSION: '3.47.7'
+      IOS_BUNDLE_ID: app.zhuying.zhuying
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test --no-pub
+
+      - name: Prepare Ad Hoc signing
+        if: github.event_name == 'workflow_dispatch' && inputs.signing == 'adhoc'
+        env:
+          IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for name in IOS_CERTIFICATE_P12_BASE64 IOS_CERTIFICATE_PASSWORD IOS_PROVISIONING_PROFILE_BASE64 IOS_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              echo "Missing required GitHub Actions secret: $name" >&2
+              exit 1
+            fi
+          done
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/zhuying-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          CERTIFICATE_PATH="$RUNNER_TEMP/distribution.p12"
+          PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
+          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
+
+          printf '%s' "$IOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          printf '%s' "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -k "$KEYCHAIN_PATH" -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" "$HOME/Library/Keychains/login.keychain-db"
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+
+          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
+          PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$PROFILE_PLIST")
+          PROFILE_TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")
+          PROFILE_BUNDLE_PATTERN="${PROFILE_APP_ID#*.}"
+          if [ "$PROFILE_TEAM_ID" != "$IOS_TEAM_ID" ]; then
+            echo 'Provisioning profile Team ID does not match IOS_TEAM_ID.' >&2
+            exit 1
+          fi
+          case "$IOS_BUNDLE_ID" in
+            $PROFILE_BUNDLE_PATTERN) ;;
+            *) echo "Provisioning profile does not match $IOS_BUNDLE_ID" >&2; exit 1 ;;
+          esac
+          if ! /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices' "$PROFILE_PLIST" >/dev/null 2>&1; then
+            echo 'The provisioning profile must be Ad Hoc and include registered devices.' >&2
+            exit 1
+          fi
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          SIGNING_IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | awk -F '"' '/Apple Distribution:/ { print $2; exit }')"
+          if [ -z "$SIGNING_IDENTITY" ]; then
+            echo 'No Apple Distribution identity found in the imported certificate.' >&2
+            exit 1
+          fi
+          echo "IOS_SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
+          echo "IOS_PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          export PROFILE_NAME
+          python3 - <<'PY'
+          import os
+          import plistlib
+
+          options = {
+              "method": "ad-hoc",
+              "signingStyle": "manual",
+              "teamID": os.environ["IOS_TEAM_ID"],
+              "provisioningProfiles": {
+                  os.environ["IOS_BUNDLE_ID"]: os.environ["PROFILE_NAME"]
+              },
+              "stripSwiftSymbols": True,
+              "thinning": "<none>",
+          }
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "ExportOptions.plist"), "wb") as output:
+              plistlib.dump(options, output)
+          PY
+
+      - name: Build Ad Hoc archive
+        if: github.event_name == 'workflow_dispatch' && inputs.signing == 'adhoc'
+        run: |
+          flutter build ios --release --no-codesign --no-pub
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/ios/archive/Runner.xcarchive" \
+            archive \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$IOS_SIGNING_IDENTITY" \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$IOS_PROFILE_NAME"
+
+      - name: Export Ad Hoc IPA
+        if: github.event_name == 'workflow_dispatch' && inputs.signing == 'adhoc'
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$PWD/build/ios/archive/Runner.xcarchive" \
+            -exportPath "$PWD/build/ios/ipa" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+          mkdir -p build/ios/artifacts
+          cp build/ios/ipa/*.ipa build/ios/artifacts/zhuying-ios-adhoc.ipa
+
+      - name: Remove signing materials
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.signing == 'adhoc'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/zhuying-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/distribution.p12" "$RUNNER_TEMP/profile.mobileprovision" "$RUNNER_TEMP/profile.plist" "$RUNNER_TEMP/ExportOptions.plist"
+
+      - name: Build unsigned iOS app
+        if: github.event_name != 'workflow_dispatch' || inputs.signing != 'adhoc'
+        run: flutter build ios --release --no-codesign --no-pub
+
+      - name: Package unsigned IPA
+        if: github.event_name != 'workflow_dispatch' || inputs.signing != 'adhoc'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/zhuying-ipa/Payload" build/ios/artifacts
+          cp -R build/ios/iphoneos/Runner.app "$RUNNER_TEMP/zhuying-ipa/Payload/Runner.app"
+          /usr/bin/zip -qr build/ios/artifacts/zhuying-ios-unsigned.ipa Payload
+          rm -rf "$RUNNER_TEMP/zhuying-ipa"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhuying-ios-${{ github.event_name == 'workflow_dispatch' && inputs.signing == 'adhoc' && 'adhoc' || 'unsigned' }}
+          path: build/ios/artifacts/*.ipa
+          if-no-files-found: error
+          retention-days: 14

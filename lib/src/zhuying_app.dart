@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app_store.dart';
 import 'models.dart';
@@ -114,6 +116,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell>
     with SingleTickerProviderStateMixin {
+  static const _nativeDockChannel = MethodChannel('zhuying/native-dock');
   late final AnimationController _tabTransition;
   int _selectedIndex = 0;
   int _previousIndex = 0;
@@ -292,6 +295,12 @@ class _AppShellState extends State<AppShell>
             ),
             bottomNavigationBar: desktop
                 ? null
+                : _isNativeIosDock
+                ? _NativeIosDock(
+                    selectedIndex: _selectedIndex,
+                    onSelected: _select,
+                    channel: _nativeDockChannel,
+                  )
                 : NavigationBar(
                     selectedIndex: _selectedIndex,
                     onDestinationSelected: _select,
@@ -352,6 +361,83 @@ class _AppShellState extends State<AppShell>
   void dispose() {
     _tabTransition.dispose();
     super.dispose();
+  }
+
+  bool get _isNativeIosDock =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+}
+
+class _NativeIosDock extends StatefulWidget {
+  const _NativeIosDock({
+    required this.selectedIndex,
+    required this.onSelected,
+    required this.channel,
+  });
+
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+  final MethodChannel channel;
+
+  @override
+  State<_NativeIosDock> createState() => _NativeIosDockState();
+}
+
+class _NativeIosDockState extends State<_NativeIosDock> {
+  @override
+  void initState() {
+    super.initState();
+    widget.channel.setMethodCallHandler(_handleNativeSelection);
+  }
+
+  @override
+  void didUpdateWidget(covariant _NativeIosDock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.channel != widget.channel) {
+      oldWidget.channel.setMethodCallHandler(null);
+      widget.channel.setMethodCallHandler(_handleNativeSelection);
+    }
+    if (oldWidget.selectedIndex != widget.selectedIndex) {
+      _selectNativeTab();
+    }
+  }
+
+  Future<void> _handleNativeSelection(MethodCall call) async {
+    if (call.method == 'selected' && call.arguments is int) {
+      widget.onSelected(call.arguments as int);
+    }
+  }
+
+  Future<void> _selectNativeTab() async {
+    try {
+      await widget.channel.invokeMethod<void>('select', widget.selectedIndex);
+    } on MissingPluginException {
+      // The platform view may not have been created yet.
+    } on PlatformException {
+      // Keep Flutter navigation responsive if the native bar is unavailable.
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.channel.setMethodCallHandler(null);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    return SizedBox(
+      height: 58 + bottomInset,
+      child: UiKitView(
+        viewType: 'zhuying/native-glass-dock',
+        creationParams: {
+          'selectedIndex': widget.selectedIndex,
+          'bottomInset': bottomInset,
+        },
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: (_) => _selectNativeTab(),
+      ),
+    );
   }
 }
 

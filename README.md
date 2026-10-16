@@ -18,6 +18,30 @@ APK 输出位置：`build/app/outputs/flutter-apk/app-release.apk`。当前 rele
 
 Windows 下额外关闭 Kotlin 增量编译，避免项目盘符与 Pub 缓存盘符不同时出现 Kotlin 缓存路径错误。版本号使用 `pubspec.yaml` 中的 `version` 字段；每次发布 Android 更新时递增 `+` 后的 build number，确保设备可识别为新版本。
 
+## iOS 构建与真机安装
+
+没有 Mac 时，可使用 GitHub Actions 的 macOS 26 runner（Xcode 26.6 / iOS 26 SDK）：推送到 `main` 后会自动构建，或在 GitHub 仓库 **Actions → iOS package → Run workflow** 手动触发。默认 `unsigned` 模式会运行测试并上传 `zhuying-ios-unsigned.ipa`，适用于检查构建产物；**未签名 IPA 不能安装到 iPhone**。
+
+要安装到已登记的 iPhone，需要 Apple Developer Program、Apple Distribution `.p12` 证书和包含该设备 UDID 的 Ad Hoc provisioning profile。将以下内容添加到仓库 **Settings → Secrets and variables → Actions → Repository secrets**，不要提交证书或私钥到 Git：
+
+- `IOS_CERTIFICATE_P12_BASE64`：`.p12` 文件的 Base64 文本。
+- `IOS_CERTIFICATE_PASSWORD`：导出 `.p12` 时设置的密码。
+- `IOS_PROVISIONING_PROFILE_BASE64`：Ad Hoc `.mobileprovision` 文件的 Base64 文本。
+- `IOS_TEAM_ID`：Apple Developer Team ID。
+
+在 Windows PowerShell 中可用以下命令生成不带换行的 Base64 值，再直接粘贴到对应 GitHub secret；在本机安全存放证书文件，命令不会上传或打印证书内容：
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\secure\distribution.p12')) | Set-Clipboard
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\secure\profile.mobileprovision')) | Set-Clipboard
+```
+
+每次只运行一行：先把剪贴板内容放进对应 secret，再运行下一行。Ad Hoc profile 必须登记目标 iPhone 的 UDID、使用 `app.zhuying.zhuying` App ID，并与该 Apple Distribution 证书属于同一个 Team。
+
+之后手动运行 workflow 并选择 `adhoc`。生成的 `zhuying-ios-adhoc.ipa` 可安装到该 provisioning profile 已登记且未过期的设备；Ad Hoc 安装仍需通过 Apple Devices、Apple Configurator 或其他签名安装工具完成。TestFlight 分发需另行配置 App Store Connect 发布流程。
+
+iOS 底部导航由原生 UIKit `UITabBar` 承载。使用 iOS 26 SDK 时由系统应用 Liquid Glass 外观；较旧系统继续使用系统原生 Tab Bar 外观。导航内容和页面转场仍由 Flutter 管理。
+
 ## Web source proxy
 
 The three preset CMS endpoints do not expose browser CORS headers. Android and
