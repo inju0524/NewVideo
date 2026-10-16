@@ -1,7 +1,12 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zhuying/src/app_store.dart';
 import 'package:zhuying/src/models.dart';
 import 'package:zhuying/src/zhuying_app.dart';
@@ -344,8 +349,8 @@ void main() {
           title: 'Comedy',
           sourceId: 'local-category',
           sourceName: '测试片源',
-          genre: '喜剧',
-          genres: ['喜剧'],
+          genre: 'Comedy',
+          genres: ['Comedy'],
           isDemo: true,
         ),
         const MediaItem(
@@ -383,6 +388,122 @@ void main() {
     await tester.tap(find.widgetWithText(ChoiceChip, '全部'));
     await tester.pump();
     expect(find.text('3 部影片'), findsOneWidget);
+
+    final comedyChoice = find.widgetWithText(ChoiceChip, '喜剧');
+    await tester.ensureVisible(comedyChoice);
+    await tester.tap(comedyChoice);
+    await tester.pump();
+    expect(find.text('1 部影片'), findsOneWidget);
+
+    await tester.tap(find.text('筛选 · 1'));
+    await tester.pumpAndSettle();
+    expect(find.text('年份'), findsOneWidget);
+    expect(find.text('地区'), findsOneWidget);
+    expect(find.text('片源'), findsOneWidget);
+    await tester.tap(find.text('应用筛选'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('category zero-results can load later catalog pages', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({});
+    final source = MediaSource(
+      id: 'category-paging',
+      name: '分类分页源',
+      endpoint: 'https://media.example/api.php/provide/vod',
+    );
+    final store = AppStore(
+      client: MockClient((request) async {
+        if (request.url.queryParameters['at'] == 'xml') {
+          return http.Response(
+            '<rss><class><ty id="8">喜剧片</ty></class></rss>',
+            200,
+          );
+        }
+        if (request.url.queryParameters['t'] != null) {
+          return http.Response(
+            jsonEncode({
+              'pagecount': 1,
+              'list': [
+                {
+                  'vod_id': 'comedy-1',
+                  'vod_name': 'Comedy Film',
+                  'type_name': '电影片',
+                  'vod_pic': 'https://images.example/comedy.jpg',
+                },
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (request.url.queryParameters['ac'] != 'list') {
+          return http.Response(
+            jsonEncode({'list': const []}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        final page = int.parse(request.url.queryParameters['pg']!);
+        final rows = page == 1
+            ? [
+                for (var index = 0; index < 20; index++)
+                  {
+                    'vod_id': 'action-$index',
+                    'vod_name': 'Action $index',
+                    'type_name': '动作',
+                    'vod_pic': 'https://images.example/$index.jpg',
+                  },
+              ]
+            : [
+                {
+                  'vod_id': 'comedy-1',
+                  'vod_name': 'Comedy Film',
+                  'type_name': 'Comedy',
+                  'vod_pic': 'https://images.example/comedy.jpg',
+                },
+              ];
+        return http.Response(
+          jsonEncode({'pagecount': 2, 'list': rows}),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    )..sources = [source];
+
+    await store.refreshSources();
+    expect(
+      store.sources.single.health,
+      SourceHealth.available,
+      reason: store.sources.single.statusMessage,
+    );
+    expect(store.categoryMedia, hasLength(20));
+    expect(store.hasMoreCatalog, isTrue);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(
+          body: AnimatedBuilder(
+            animation: store,
+            builder: (context, _) =>
+                CategoriesPage(store: store, onOpenItem: (_) {}),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final comedyFilter = find.widgetWithText(ChoiceChip, '喜剧');
+    await tester.ensureVisible(comedyFilter);
+    await tester.tap(comedyFilter);
+    await tester.pump();
+    expect(tester.widget<ChoiceChip>(comedyFilter).selected, isTrue);
+    await tester.pumpAndSettle();
+    expect(find.text('1 部影片'), findsOneWidget);
+    expect(find.text('Comedy Film'), findsWidgets);
+    store.dispose();
   });
 
   testWidgets('player opens in a 16:9 inline layout with details below', (
@@ -445,6 +566,54 @@ void main() {
     await tester.pump();
     expect(find.text('已追剧'), findsOneWidget);
     expect(store.follows, contains(item.id));
+
+    store.dispose();
+  });
+
+  testWidgets('sensor rotation switches the player between inline and focus', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (_) async => null);
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = AppStore();
+    const item = MediaItem(
+      id: 'rotation-player-item',
+      title: 'Rotation player',
+      sourceId: 'rotation-test',
+      sourceName: '测试线路',
+      episodes: [MediaEpisode(title: '第01集', url: 'not-a-playback-url')],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: PlayerPage(
+          store: store,
+          item: item,
+          episode: item.episodes.first,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const ValueKey('player-focus-layout')), findsNothing);
+
+    tester.view.physicalSize = const Size(844, 390);
+    tester.binding.handleMetricsChanged();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('player-focus-layout')), findsOneWidget);
+
+    tester.view.physicalSize = const Size(390, 844);
+    tester.binding.handleMetricsChanged();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('player-focus-layout')), findsNothing);
 
     store.dispose();
   });

@@ -34,9 +34,12 @@ class AppStore extends ChangeNotifier {
   static const _autoplayKey = 'zhuying.autoplayNext.v1';
   static const _initialCatalogPages = 1;
   static const _catalogPagesPerLoadMore = 5;
+  static const _maxCategoryPagesPerLoad = 10;
+  static const _categoryResultTarget = 18;
   static const _maxCatalogPages = 200;
   static const _cmsDetailBatchSize = 100;
   static const _defaultCmsPageSize = 20;
+  static const _defaultMediaServerPageSize = 100;
   static const _maxHomeSnapshotItems = 30;
   static const _maxSearchResults = 120;
   static const _maxSearchHistory = 10;
@@ -70,6 +73,12 @@ class AppStore extends ChangeNotifier {
   bool isLoadingMoreCatalog = false;
   bool _disposed = false;
   final Map<String, int> _catalogNextPage = {};
+  final Map<String, Map<String, MediaItem>> _categoryItemsByQuery = {};
+  final Map<String, Map<String, int>> _categoryNextPagesByQuery = {};
+  final Set<String> _loadedCategoryQueries = {};
+  final Map<String, List<_CmsTypeCategory>> _cmsTypeCategories = {};
+  ({List<String> genres, String? year, String? region, String? sourceName})?
+  _queuedCategoryQuery;
   int _searchGeneration = 0;
 
   List<MediaItem> get allMedia {
@@ -81,6 +90,35 @@ class AppStore extends ChangeNotifier {
         ...favoriteItems,
       ].where((item) => item.isDemo || activeIds.contains(item.sourceId)),
     );
+  }
+
+  List<MediaItem> get categoryMedia {
+    final activeIds = enabledSources.map((source) => source.id).toSet();
+    final merged = <String, MediaItem>{};
+    for (final item in [
+      ...catalog,
+      ...homeSnapshot,
+      ...localItems,
+      ...favoriteItems,
+      ..._categoryItemsByQuery.values.expand((items) => items.values),
+    ].where((item) => item.isDemo || activeIds.contains(item.sourceId))) {
+      final existing = merged[item.id];
+      if (existing == null) {
+        merged[item.id] = item;
+        continue;
+      }
+      final genres = normalizeGenres([
+        ...existing.genreLabels,
+        ...item.genreLabels,
+      ]);
+      if (genres.length != existing.genreLabels.length) {
+        merged[item.id] = existing.copyWith(
+          genre: genres.isEmpty ? '' : genres.first,
+          genres: genres,
+        );
+      }
+    }
+    return merged.values.toList();
   }
 
   List<MediaSource> get enabledSources =>
@@ -96,6 +134,22 @@ class AppStore extends ChangeNotifier {
   }
 
   bool get hasMoreCatalog => _catalogNextPage.isNotEmpty;
+
+  bool hasMoreCategoryPages({
+    Iterable<String> genres = const [],
+    String? year,
+    String? region,
+    String? sourceName,
+  }) {
+    final key = _categoryQueryKey(
+      genres: genres,
+      year: year,
+      region: region,
+      sourceName: sourceName,
+    );
+    return !_loadedCategoryQueries.contains(key) ||
+        (_categoryNextPagesByQuery[key]?.isNotEmpty ?? false);
+  }
 
   void cancelPendingSearch() => _searchGeneration++;
 
@@ -326,9 +380,25 @@ class AppStore extends ChangeNotifier {
     isRefreshing = false;
     await _saveSources();
     notifyListeners();
+    _drainQueuedCategoryQuery();
   }
 
-  Future<void> loadMoreCatalog() async {
+  Future<void> loadMoreCatalog({
+    Iterable<String> genres = const [],
+    String? year,
+    String? region,
+    String? sourceName,
+  }) async {
+    final selectedGenres = normalizeGenres(genres).toSet();
+    if (selectedGenres.isNotEmpty) {
+      await _loadMoreGenreCatalog(
+        genres: selectedGenres,
+        year: year,
+        region: region,
+        sourceName: sourceName,
+      );
+      return;
+    }
     if (isRefreshing || isLoadingMoreCatalog || _catalogNextPage.isEmpty) {
       return;
     }
@@ -340,10 +410,6 @@ class AppStore extends ChangeNotifier {
     _catalogNextPage.removeWhere(
       (sourceId, _) => !sourcesById.containsKey(sourceId),
     );
-    final sourcesToFetch = _catalogNextPage.entries
-        .map((entry) => (source: sourcesById[entry.key], page: entry.value))
-        .where((entry) => entry.source != null)
-        .toList();
     void publish(MediaSource source, List<MediaItem> items) {
       if (_disposed || items.isEmpty) return;
       catalog = _uniqueItems([
@@ -362,6 +428,10 @@ class AppStore extends ChangeNotifier {
     }
 
     try {
+      final sourcesToFetch = _catalogNextPage.entries
+          .map((entry) => (source: sourcesById[entry.key], page: entry.value))
+          .where((entry) => entry.source != null)
+          .toList();
       final results = await _mapConcurrent(
         sourcesToFetch,
         _sourceConcurrency,
@@ -379,8 +449,261 @@ class AppStore extends ChangeNotifier {
     } finally {
       isLoadingMoreCatalog = false;
       notifyListeners();
+      _drainQueuedCategoryQuery();
     }
   }
+
+  Future<void> _loadMoreGenreCatalog({
+    required Set<String> genres,
+    String? year,
+    String? region,
+    String? sourceName,
+  }) async {
+    final queryKey = _categoryQueryKey(
+      genres: genres,
+      year: year,
+      region: region,
+      sourceName: sourceName,
+    );
+    if (isRefreshing) {
+      _queuedCategoryQuery = (
+        genres: genres.toList(),
+        year: year,
+        region: region,
+        sourceName: sourceName,
+      );
+      return;
+    }
+    if (isLoadingMoreCatalog) {
+      _queuedCategoryQuery = (
+        genres: genres.toList(),
+        year: year,
+        region: region,
+        sourceName: sourceName,
+      );
+      return;
+    }
+    if (_loadedCategoryQueries.contains(queryKey) &&
+        (_categoryNextPagesByQuery[queryKey]?.isEmpty ?? true)) {
+      return;
+    }
+    isLoadingMoreCatalog = true;
+    notifyListeners();
+    try {
+      final sourcesById = {
+        for (final source in enabledSources) source.id: source,
+      };
+      var routes = _categoryNextPagesByQuery[queryKey] ?? <String, int>{};
+      if (!_loadedCategoryQueries.contains(queryKey)) {
+        final cmsSources = enabledSources
+            .where(
+              (source) =>
+                  source.kind == SourceKind.cms &&
+                  (sourceName == null || source.name == sourceName),
+            )
+            .toList();
+        final typeLists = await _mapConcurrent(
+          cmsSources,
+          _sourceConcurrency,
+          _fetchCmsTypes,
+        );
+        routes = <String, int>{};
+        for (var index = 0; index < cmsSources.length; index++) {
+          final source = cmsSources[index];
+          final matchedTypes = typeLists[index]
+              .where((type) => genres.contains(type.genre))
+              .toList();
+          if (matchedTypes.isEmpty) {
+            routes['${source.id}|fallback'] = 1;
+          } else {
+            for (final type in matchedTypes) {
+              routes['${source.id}|${type.id}|${type.genre}'] = 1;
+            }
+          }
+        }
+        _categoryNextPagesByQuery[queryKey] = routes;
+        _loadedCategoryQueries.add(queryKey);
+        for (final source in enabledSources.where(
+          (source) =>
+              source.kind != SourceKind.cms &&
+              source.kind != SourceKind.m3u &&
+              (sourceName == null || source.name == sourceName),
+        )) {
+          routes['${source.id}|fallback'] = 1;
+        }
+      }
+      bool hasEnoughItems() {
+        final matches = _categoryItemsByQuery[queryKey]?.values.where((item) {
+          return (year == null || item.year == year) &&
+              (region == null || item.region == region) &&
+              (sourceName == null || item.sourceName == sourceName);
+        }).length;
+        return (matches ?? 0) >= _categoryResultTarget;
+      }
+
+      final failedRoutes = <String, int>{};
+      var pagesFetched = 0;
+      while (routes.keys.any((route) => !failedRoutes.containsKey(route)) &&
+          pagesFetched < _maxCategoryPagesPerLoad &&
+          (pagesFetched == 0 || !hasEnoughItems())) {
+        final requestedRoutes = routes.entries
+            .where((entry) => !failedRoutes.containsKey(entry.key))
+            .toList();
+        final results = await _mapConcurrent(
+          requestedRoutes,
+          _sourceConcurrency,
+          (entry) async {
+            final parts = entry.key.split('|');
+            final source = sourcesById[parts.first];
+            if (source == null) return null;
+            final categoryId = parts.length > 2 && parts[1] != 'fallback'
+                ? parts[1]
+                : null;
+            final routeGenre = parts.length > 2 ? parts[2] : null;
+            final result = source.kind == SourceKind.cms
+                ? await _fetchSource(
+                    source,
+                    startPage: entry.value,
+                    pageLimit: 1,
+                    categoryId: categoryId,
+                    year: year,
+                    region: region,
+                    trackCatalogPagination: false,
+                    fetchMissingPosters: false,
+                  )
+                : await _fetchMediaServer(
+                    source,
+                    genres: genres.toList(),
+                    startIndex: (entry.value - 1) * _defaultCmsPageSize,
+                  );
+            final items = [
+              for (final item in result.items)
+                if (routeGenre != null)
+                  item.copyWith(
+                    genre: routeGenre,
+                    genres: normalizeGenres([...item.genreLabels, routeGenre]),
+                  )
+                else
+                  item,
+            ];
+            return _CategoryRouteResult(
+              entry.key,
+              source,
+              entry.value,
+              _SourceFetchResult(
+                result.source,
+                items,
+                nextPage: result.nextPage,
+              ),
+            );
+          },
+        );
+
+        final nextRoutes = <String, int>{};
+        final updatedSources = <String, MediaSource>{};
+        final queryItems = _categoryItemsByQuery.putIfAbsent(
+          queryKey,
+          () => <String, MediaItem>{},
+        );
+        for (final routeResult in results.whereType<_CategoryRouteResult>()) {
+          final source = routeResult.source;
+          if (source == null) continue;
+          updatedSources[source.id] = routeResult.result.source;
+          if (routeResult.result.source.health == SourceHealth.error) {
+            failedRoutes[routeResult.routeKey] = routeResult.requestPage;
+            continue;
+          }
+          for (final item in routeResult.result.items) {
+            final genreMatch = item.genreLabels.any(genres.contains);
+            if (genreMatch &&
+                (year == null || item.year == year) &&
+                (region == null || item.region == region) &&
+                (sourceName == null || item.sourceName == sourceName)) {
+              queryItems[item.id] = item;
+            }
+          }
+          if (routeResult.result.nextPage case final nextPage?) {
+            nextRoutes[routeResult.routeKey] = nextPage;
+          }
+        }
+        nextRoutes.addAll(failedRoutes);
+        _categoryNextPagesByQuery[queryKey] = nextRoutes;
+        routes = nextRoutes;
+        _applySourceResults(updatedSources);
+        pagesFetched++;
+        notifyListeners();
+      }
+    } finally {
+      isLoadingMoreCatalog = false;
+      notifyListeners();
+      _drainQueuedCategoryQuery();
+    }
+  }
+
+  void _drainQueuedCategoryQuery() {
+    final queued = _queuedCategoryQuery;
+    _queuedCategoryQuery = null;
+    if (queued == null || _disposed || isRefreshing || isLoadingMoreCatalog) {
+      if (queued != null) _queuedCategoryQuery = queued;
+      return;
+    }
+    unawaited(
+      _loadMoreGenreCatalog(
+        genres: queued.genres.toSet(),
+        year: queued.year,
+        region: queued.region,
+        sourceName: queued.sourceName,
+      ),
+    );
+  }
+
+  Future<List<_CmsTypeCategory>> _fetchCmsTypes(MediaSource source) async {
+    final cached = _cmsTypeCategories[source.id];
+    if (cached != null) return cached;
+    try {
+      final headers = await requestHeaders(source.id);
+      final response = await _get(
+        _requestUri(source.endpoint, const {
+          'ac': 'list',
+          'at': 'xml',
+          'pg': '1',
+        }),
+        headers: headers,
+      );
+      _checkResponse(response);
+      final body = utf8.decode(response.bodyBytes, allowMalformed: true).trim();
+      final document = XmlDocument.parse(body);
+      final types = <_CmsTypeCategory>[];
+      final seen = <String>{};
+      for (final element in document.findAllElements('ty')) {
+        final id = element.getAttribute('id')?.trim() ?? '';
+        if (id.isEmpty) continue;
+        final genres = normalizeGenres(element.innerText);
+        for (final genre in genres) {
+          if (seen.add('$id|$genre')) {
+            types.add(_CmsTypeCategory(id: id, genre: genre));
+          }
+        }
+      }
+      _cmsTypeCategories[source.id] = types;
+      return types;
+    } on Object {
+      // Sources without the standard XML category tree use catalog paging.
+      return const [];
+    }
+  }
+
+  static String _categoryQueryKey({
+    required Iterable<String> genres,
+    String? year,
+    String? region,
+    String? sourceName,
+  }) => [
+    ...normalizeGenres(genres).toList()..sort(),
+    year ?? '',
+    region ?? '',
+    sourceName ?? '',
+  ].join('|');
 
   Future<List<MediaItem>> search(
     String query, {
@@ -835,6 +1158,10 @@ class AppStore extends ChangeNotifier {
     String? query,
     int startPage = 1,
     int pageLimit = _initialCatalogPages,
+    String? categoryId,
+    String? year,
+    String? region,
+    bool trackCatalogPagination = true,
     bool fetchMissingPosters = true,
     void Function(List<MediaItem> items)? onItems,
   }) async {
@@ -845,6 +1172,9 @@ class AppStore extends ChangeNotifier {
         headers: headers,
         page: startPage,
         query: query,
+        categoryId: categoryId,
+        year: year,
+        region: region,
       );
       final rawList = [...firstPage.rows];
       List<MediaItem> mapRows(
@@ -900,6 +1230,9 @@ class AppStore extends ChangeNotifier {
               headers: headers,
               page: page,
               query: query,
+              categoryId: categoryId,
+              year: year,
+              region: region,
             );
           } on Object {
             nextPage = page;
@@ -936,10 +1269,12 @@ class AppStore extends ChangeNotifier {
         }
       }
       if (pendingItems.isNotEmpty) onItems?.call(List.of(pendingItems));
-      if (query == null && !reachedEnd && nextPage <= _maxCatalogPages) {
-        _catalogNextPage[source.id] = nextPage;
-      } else if (query == null) {
-        _catalogNextPage.remove(source.id);
+      if (query == null && categoryId == null && trackCatalogPagination) {
+        if (!reachedEnd && nextPage <= _maxCatalogPages) {
+          _catalogNextPage[source.id] = nextPage;
+        } else {
+          _catalogNextPage.remove(source.id);
+        }
       }
       final missingPosterIds = <String>{};
       for (final value in rawList.whereType<Map>()) {
@@ -1003,6 +1338,7 @@ class AppStore extends ChangeNotifier {
           statusMessage: '${items.length} 部影片',
         ),
         items,
+        nextPage: reachedEnd || nextPage > _maxCatalogPages ? null : nextPage,
       );
     } on SourceRequestException catch (error) {
       return _SourceFetchResult(
@@ -1033,9 +1369,15 @@ class AppStore extends ChangeNotifier {
     required Map<String, String> headers,
     required int page,
     String? query,
+    String? categoryId,
+    String? year,
+    String? region,
   }) async {
     final params = <String, String>{'ac': 'list', 'pg': '$page'};
     if (query != null && query.isNotEmpty) params['wd'] = query;
+    if (categoryId != null && categoryId.isNotEmpty) params['t'] = categoryId;
+    if (year != null && year.isNotEmpty) params['y'] = year;
+    if (region != null && region.isNotEmpty) params['a'] = region;
     final response = await _get(
       _requestUri(source.endpoint, params),
       headers: headers,
@@ -1048,20 +1390,27 @@ class AppStore extends ChangeNotifier {
   Future<_SourceFetchResult> _fetchMediaServer(
     MediaSource source, {
     String? query,
+    List<String> genres = const [],
+    int startIndex = 0,
     void Function(List<MediaItem> items)? onItems,
   }) async {
     try {
       final headers = await requestHeaders(source.id);
       final endpoint = Uri.parse(source.endpoint).resolve('Items');
+      final pageSize = genres.isEmpty
+          ? _defaultMediaServerPageSize
+          : _defaultCmsPageSize;
       final params = <String, String>{
         'Recursive': 'true',
         'IncludeItemTypes': 'Movie,Series',
         'Fields': 'Overview,Genres,PrimaryImageAspectRatio',
-        'Limit': '100',
+        'Limit': '$pageSize',
+        'StartIndex': '$startIndex',
         'SortBy': 'DateCreated',
         'SortOrder': 'Descending',
       };
       if (query != null && query.isNotEmpty) params['SearchTerm'] = query;
+      if (genres.isNotEmpty) params['Genres'] = genres.join(',');
       final response = await _get(
         _requestUri(endpoint.toString(), params),
         headers: headers,
@@ -1085,12 +1434,17 @@ class AppStore extends ChangeNotifier {
           .where((item) => item.title.isNotEmpty)
           .toList();
       onItems?.call(items);
+      final total = _positiveInt(payload['TotalRecordCount']);
+      final nextPage = total != null && startIndex + rows.length < total
+          ? startIndex ~/ pageSize + 2
+          : null;
       return _SourceFetchResult(
         source.copyWith(
           health: SourceHealth.available,
           statusMessage: '${items.length} 部影片',
         ),
         items,
+        nextPage: nextPage,
       );
     } on SourceRequestException catch (error) {
       return _SourceFetchResult(
@@ -1565,10 +1919,32 @@ class SourceRequestException implements Exception {
 }
 
 class _SourceFetchResult {
-  const _SourceFetchResult(this.source, this.items);
+  const _SourceFetchResult(this.source, this.items, {this.nextPage});
 
   final MediaSource source;
   final List<MediaItem> items;
+  final int? nextPage;
+}
+
+class _CmsTypeCategory {
+  const _CmsTypeCategory({required this.id, required this.genre});
+
+  final String id;
+  final String genre;
+}
+
+class _CategoryRouteResult {
+  const _CategoryRouteResult(
+    this.routeKey,
+    this.source,
+    this.requestPage,
+    this.result,
+  );
+
+  final String routeKey;
+  final MediaSource? source;
+  final int requestPage;
+  final _SourceFetchResult result;
 }
 
 class _CmsPage {

@@ -81,6 +81,34 @@ void main() {
     expect(item.genres, ['剧情', '爱情', '悬疑', '动画']);
   });
 
+  test('normalizes common English CMS genres to Chinese filter labels', () {
+    expect(normalizeGenres('Comedy,Romance,Action,Science Fiction,Horror'), [
+      '喜剧',
+      '爱情',
+      '动作',
+      '科幻',
+      '恐怖',
+    ]);
+  });
+
+  test('prefers CMS genre metadata over broad source type names', () {
+    final item = MediaItem.fromCms(
+      {
+        'vod_id': 'genre-priority',
+        'vod_name': 'Night Watch',
+        'type_name': '电影片',
+        'vod_class': '恐怖片,悬疑',
+      },
+      source: MediaSource(
+        id: 'cms-genre-priority',
+        name: 'CMS',
+        endpoint: 'https://media.example/api.php/provide/vod',
+      ),
+    );
+
+    expect(item.genreLabels, ['恐怖', '悬疑']);
+  });
+
   test('reads CMS ratings and preserves them in local history JSON', () {
     final item = MediaItem.fromCms(
       {

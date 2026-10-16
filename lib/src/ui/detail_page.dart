@@ -513,7 +513,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   bool _switchingEpisode = false;
   bool _isFullscreen = false;
   bool _fullscreenTransitioning = false;
+  bool _lockLandscapeForFullscreen = false;
+  bool _restoreSensorAfterPortrait = false;
   bool? _pendingBrowserFullscreen;
+  bool? _pendingSensorLandscape;
   bool _browserFullscreenActive = false;
   bool _browserFullscreenRequested = false;
   bool _descriptionExpanded = false;
@@ -535,6 +538,39 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       _handleBrowserFullscreenChange,
     );
     _createController();
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _syncSensorOrientation(),
+    );
+  }
+
+  @override
+  void didChangeMetrics() => _syncSensorOrientation();
+
+  void _syncSensorOrientation() {
+    if (!mounted || kIsWeb || !_supportsSensorFullscreen) {
+      return;
+    }
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isEmpty) return;
+    final size = views.first.physicalSize;
+    if (size.isEmpty) return;
+    final landscape = size.width > size.height;
+    if (_restoreSensorAfterPortrait) {
+      if (landscape) return;
+      _restoreSensorAfterPortrait = false;
+      unawaited(SystemChrome.setPreferredOrientations(const []));
+    }
+    if (_lockLandscapeForFullscreen && _isFullscreen) return;
+    if (landscape == _isFullscreen) return;
+    if (_fullscreenTransitioning) {
+      _pendingSensorLandscape = landscape;
+      return;
+    }
+    if (landscape) {
+      unawaited(_enterFullscreen(lockLandscape: false));
+    } else {
+      unawaited(_exitFullscreen(forcePortrait: false));
+    }
   }
 
   Future<void> _createController() async {
@@ -698,8 +734,13 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       return;
     }
 
-    if (_fullscreenTransitioning) return;
+    await _enterFullscreen(lockLandscape: !kIsWeb);
+  }
+
+  Future<void> _enterFullscreen({required bool lockLandscape}) async {
+    if (_isFullscreen || _fullscreenTransitioning) return;
     _fullscreenTransitioning = true;
+    _lockLandscapeForFullscreen = lockLandscape;
     if (mounted) setState(() => _isFullscreen = true);
     try {
       if (kIsWeb) {
@@ -713,14 +754,17 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           }),
         );
       } else {
-        await SystemChrome.setPreferredOrientations(const [
-          DeviceOrientation.landscapeLeft,
-          DeviceOrientation.landscapeRight,
-        ]);
+        if (lockLandscape) {
+          await SystemChrome.setPreferredOrientations(const [
+            DeviceOrientation.landscapeLeft,
+            DeviceOrientation.landscapeRight,
+          ]);
+        }
         await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
       }
     } on Object catch (error) {
       debugPrint('Could not configure fullscreen mode: $error');
+      _lockLandscapeForFullscreen = false;
       _browserFullscreenRequested = false;
       _browserFullscreenActive = false;
     } finally {
@@ -758,7 +802,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         child: Scaffold(
           backgroundColor: _isFullscreen ? Colors.black : ZhuyingColors.canvas,
           body: _isFullscreen
-              ? _buildFocusLayout()
+              ? KeyedSubtree(
+                  key: const ValueKey('player-focus-layout'),
+                  child: _buildFocusLayout(),
+                )
               : SafeArea(top: true, bottom: false, child: _buildInlineLayout()),
         ),
       ),
@@ -976,25 +1023,45 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     if (pending != null) {
       unawaited(_handleBrowserFullscreenChange(pending));
     }
+    if (_pendingSensorLandscape != null) {
+      _pendingSensorLandscape = null;
+      _syncSensorOrientation();
+    }
   }
 
-  Future<void> _exitFullscreen({bool browserAlreadyExited = false}) async {
+  Future<void> _exitFullscreen({
+    bool browserAlreadyExited = false,
+    bool forcePortrait = true,
+  }) async {
     if (!_isFullscreen || _fullscreenTransitioning) return;
     _fullscreenTransitioning = true;
+    _lockLandscapeForFullscreen = false;
+    if (mounted) setState(() => _isFullscreen = false);
     try {
       if (!browserAlreadyExited) await exitPlayerFullscreen();
       _browserFullscreenRequested = false;
       _browserFullscreenActive = false;
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      await SystemChrome.setPreferredOrientations(const []);
-      if (mounted) setState(() => _isFullscreen = false);
+      if (forcePortrait && !kIsWeb && _supportsSensorFullscreen) {
+        _restoreSensorAfterPortrait = true;
+        await SystemChrome.setPreferredOrientations(const [
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+        ]);
+      } else {
+        _restoreSensorAfterPortrait = false;
+        await SystemChrome.setPreferredOrientations(const []);
+      }
     } on Object catch (error) {
       debugPrint('Could not restore fullscreen system UI: $error');
-      if (mounted) setState(() => _isFullscreen = false);
     } finally {
       _finishFullscreenTransition();
     }
   }
+
+  bool get _supportsSensorFullscreen =>
+      defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS;
 
   Future<void> _showEpisodeSheet() async {
     final selected = await showModalBottomSheet<int>(
@@ -1495,22 +1562,44 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
                   ignoring: !_controlsVisible,
                   child: Column(
                     children: [
-                      _topOverlay(),
+                      SafeArea(
+                        left: widget.isFullscreen,
+                        top: widget.isFullscreen,
+                        right: widget.isFullscreen,
+                        bottom: false,
+                        child: _topOverlay(),
+                      ),
                       const Spacer(),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: VideoProgressIndicator(
-                          controller,
-                          allowScrubbing: true,
-                          colors: const VideoProgressColors(
-                            playedColor: ZhuyingColors.amber,
-                            bufferedColor: Colors.white38,
-                            backgroundColor: Colors.white12,
-                          ),
-                          padding: const EdgeInsets.only(top: 5, bottom: 5),
+                      SafeArea(
+                        left: widget.isFullscreen,
+                        top: false,
+                        right: widget.isFullscreen,
+                        bottom: widget.isFullscreen,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
+                              child: VideoProgressIndicator(
+                                controller,
+                                allowScrubbing: true,
+                                colors: const VideoProgressColors(
+                                  playedColor: ZhuyingColors.amber,
+                                  bufferedColor: Colors.white38,
+                                  backgroundColor: Colors.white12,
+                                ),
+                                padding: const EdgeInsets.only(
+                                  top: 5,
+                                  bottom: 5,
+                                ),
+                              ),
+                            ),
+                            compact ? _compactBar(value) : _wideBar(value),
+                          ],
                         ),
                       ),
-                      compact ? _compactBar(value) : _wideBar(value),
                     ],
                   ),
                 ),

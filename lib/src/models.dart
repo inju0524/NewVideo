@@ -367,9 +367,12 @@ class MediaItem {
           json['thumb'],
     );
     final thumbnailUrl = _validHttpUrl(rawThumbnail) ?? '';
-    final rawClass = _text(
-      json['type_name'] ?? json['vod_class'] ?? json['genre'],
-    );
+    final rawClass = _firstNonEmptyText([
+      json['vod_class'],
+      json['vod_genre'],
+      json['genre'],
+      json['type_name'],
+    ]);
     final genres = normalizeGenres(rawClass);
     final episodes = _parseEpisodes(_text(json['vod_play_url']));
 
@@ -464,6 +467,12 @@ List<String> normalizeGenres(Object? raw) {
 String _normalizeGenreLabel(String raw) {
   final value = raw.trim();
   if (value.isEmpty) return '';
+  const nonGenreCategories = {'电影', '电影片', '连续剧', '电视剧', '综艺', '综艺片', '电视节目'};
+  if (nonGenreCategories.contains(value)) return '';
+  if (RegExp(r'^(国产|大陆|内地|港台|香港|台湾|韩国|日本|泰国|欧美|海外)剧$').hasMatch(value)) {
+    return '';
+  }
+  final lowerValue = value.toLowerCase();
   const aliases = {
     '剧情片': '剧情',
     '喜剧片': '喜剧',
@@ -491,11 +500,52 @@ String _normalizeGenreLabel(String raw) {
     '歌舞片': '歌舞',
     '动漫': '动画',
   };
+  const englishAliases = {
+    'drama': '剧情',
+    'comedy': '喜剧',
+    'romance': '爱情',
+    'romantic': '爱情',
+    'action': '动作',
+    'science fiction': '科幻',
+    'sci-fi': '科幻',
+    'scifi': '科幻',
+    'thriller': '惊悚',
+    'suspense': '悬疑',
+    'mystery': '悬疑',
+    'horror': '恐怖',
+    'crime': '犯罪',
+    'animation': '动画',
+    'anime': '动画',
+    'family': '家庭',
+    'fantasy': '奇幻',
+    'war': '战争',
+    'youth': '青春',
+    'teen': '青春',
+    'erotic': '伦理',
+    'documentary': '纪录',
+    'adventure': '冒险',
+    'disaster': '灾难',
+    'biography': '传记',
+    'history': '历史',
+    'wuxia': '武侠',
+    'costume': '古装',
+    'music': '音乐',
+    'musical': '歌舞',
+  };
+  if (englishAliases[lowerValue] case final normalized?) return normalized;
   if (value.endsWith('动漫')) return '动画';
   return aliases[value] ?? value;
 }
 
 String _text(Object? value) => value?.toString().trim() ?? '';
+
+String _firstNonEmptyText(Iterable<Object?> values) {
+  for (final value in values) {
+    final text = _text(value);
+    if (text.isNotEmpty) return text;
+  }
+  return '';
+}
 
 String? _validHttpUrl(String raw) {
   final uri = Uri.tryParse(raw);

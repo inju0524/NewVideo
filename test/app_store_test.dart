@@ -312,6 +312,156 @@ void main() {
   });
 
   test(
+    'CMS categories use source-specific type IDs and independent pages',
+    () async {
+      final first = MediaSource(
+        id: 'cms-category-first',
+        name: 'First CMS',
+        endpoint: 'https://first.example/api.php/provide/vod',
+      );
+      final second = MediaSource(
+        id: 'cms-category-second',
+        name: 'Second CMS',
+        endpoint: 'https://second.example/api.php/provide/vod',
+      );
+      final categoryRequests = <Uri>[];
+      final store = AppStore(
+        client: MockClient((request) async {
+          final query = request.url.queryParameters;
+          if (query['at'] == 'xml') {
+            final id = request.url.host == 'first.example' ? '41' : '907';
+            return http.Response(
+              '<rss><class><ty id="$id">恐怖片</ty></class></rss>',
+              200,
+              headers: {'content-type': 'text/xml; charset=utf-8'},
+            );
+          }
+          if (query['t'] != null) {
+            categoryRequests.add(request.url);
+            return http.Response(
+              jsonEncode({
+                'pagecount': 2,
+                'list': [
+                  for (var index = 0; index < 20; index++)
+                    {
+                      'vod_id': '${query['t']}-${query['pg']}-$index',
+                      'vod_name': 'Horror ${query['t']} $index',
+                      'type_name': '电影片',
+                      'vod_pic': 'https://images.example/$index.jpg',
+                    },
+                ],
+              }),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'pagecount': 1,
+              'list': [
+                {
+                  'vod_id': 'home-${request.url.host}',
+                  'vod_name': 'Home item',
+                  'type_name': '剧情片',
+                  'vod_pic': 'https://images.example/home.jpg',
+                },
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      )..sources = [first, second];
+
+      await store.refreshSources();
+      await store.loadMoreCatalog(genres: const ['恐怖']);
+
+      expect(categoryRequests.map((uri) => uri.queryParameters['t']).toSet(), {
+        '41',
+        '907',
+      });
+      expect(
+        categoryRequests.every((uri) => uri.queryParameters['pg'] == '1'),
+        isTrue,
+      );
+      expect(
+        store.categoryMedia.where((item) => item.genreLabels.contains('恐怖')),
+        hasLength(40),
+      );
+      expect(store.hasMoreCategoryPages(genres: const ['恐怖']), isTrue);
+
+      await store.loadMoreCatalog(genres: const ['恐怖']);
+
+      expect(
+        categoryRequests.where((uri) => uri.queryParameters['pg'] == '2'),
+        hasLength(2),
+      );
+      expect(
+        store.categoryMedia.where((item) => item.genreLabels.contains('恐怖')),
+        hasLength(80),
+      );
+      store.dispose();
+    },
+  );
+
+  test(
+    'category falls back to directory pages when CMS types are unavailable',
+    () async {
+      final source = MediaSource(
+        id: 'cms-category-fallback',
+        name: 'Fallback CMS',
+        endpoint: 'https://fallback.example/api.php/provide/vod',
+      );
+      final requestedPages = <int>[];
+      final store = AppStore(
+        client: MockClient((request) async {
+          final query = request.url.queryParameters;
+          if (query['at'] == 'xml') {
+            return http.Response('not xml', 200);
+          }
+          final page = int.parse(query['pg']!);
+          requestedPages.add(page);
+          return http.Response(
+            jsonEncode({
+              'pagecount': 14,
+              'list': [
+                {
+                  'vod_id': '$page',
+                  'vod_name': 'Page $page',
+                  'vod_class': page >= 12 ? '喜剧片' : '动作片',
+                  'vod_pic': 'https://images.example/$page.jpg',
+                },
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      )..sources = [source];
+
+      await store.refreshSources();
+      requestedPages.clear();
+      await store.loadMoreCatalog(genres: const ['喜剧']);
+
+      expect(requestedPages, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      expect(
+        store.categoryMedia.where((item) => item.genreLabels.contains('喜剧')),
+        isEmpty,
+      );
+      expect(store.hasMoreCategoryPages(genres: const ['喜剧']), isTrue);
+
+      await store.loadMoreCatalog(genres: const ['喜剧']);
+
+      expect(requestedPages, containsAll([11, 12]));
+      expect(
+        store.categoryMedia.where((item) => item.genreLabels.contains('喜剧')),
+        hasLength(3),
+      );
+      store.dispose();
+    },
+  );
+
+  test(
     'catalog refresh loads one fast page and exposes a continuation action',
     () async {
       final source = MediaSource(
@@ -759,6 +909,11 @@ void main() {
     expect(
       store.allMedia.any((item) => item.title.startsWith('Cached')),
       isFalse,
+    );
+    expect(store.categoryMedia, hasLength(30));
+    expect(
+      store.categoryMedia.every((item) => item.title.startsWith('Cached')),
+      isTrue,
     );
     store.dispose();
   });

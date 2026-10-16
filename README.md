@@ -20,7 +20,7 @@ Windows 下额外关闭 Kotlin 增量编译，避免项目盘符与 Pub 缓存�
 
 ## iOS 构建与真机安装
 
-没有 Mac 时，可使用 GitHub Actions 的 macOS 26 runner（Xcode 26.6 / iOS 26 SDK）：推送到 `main` 后会自动构建，或在 GitHub 仓库 **Actions → iOS package → Run workflow** 手动触发。默认 `unsigned` 模式会运行测试并上传 `zhuying-ios-unsigned.ipa`，适用于检查构建产物；**未签名 IPA 不能安装到 iPhone**。
+没有 Mac 时，可使用 GitHub Actions 的 macOS 26 runner（Xcode 26.6 / iOS 26 SDK）。GitHub runner 只构建 GitHub 上已推送的提交，不会读取本机未提交文件；**每次构建前先检查并提交需要发布的本地改动，推送到 `main`，再确认 Actions 运行记录对应最新提交**。推送后会自动构建，也可在 GitHub 仓库 **Actions → iOS package → Run workflow** 手动触发。默认 `unsigned` 模式会运行测试并上传 `zhuying-ios-unsigned.ipa`，适用于检查构建产物；**未签名 IPA 不能安装到 iPhone**。
 
 要安装到已登记的 iPhone，需要 Apple Developer Program、Apple Distribution `.p12` 证书和包含该设备 UDID 的 Ad Hoc provisioning profile。将以下内容添加到仓库 **Settings → Secrets and variables → Actions → Repository secrets**，不要提交证书或私钥到 Git：
 
