@@ -1619,6 +1619,11 @@ class AppStore extends ChangeNotifier {
           ? regions.first.toString()
           : '',
       remarks: row['Type'] == 'Series' ? '剧集' : '电影',
+      contentType: row['Type'] == 'Series'
+          ? MediaContentType.series
+          : row['Type'] == 'Movie'
+          ? MediaContentType.movie
+          : MediaContentType.unknown,
       durationSeconds: ((row['RunTimeTicks'] as num? ?? 0) / 10000000).floor(),
     );
   }
@@ -2027,6 +2032,12 @@ class AppStore extends ChangeNotifier {
           ? incoming.description
           : existing.description,
       remarks: existing.remarks.isEmpty ? incoming.remarks : existing.remarks,
+      contentType:
+          existing.contentType == MediaContentType.unknown ||
+              (existing.contentType == MediaContentType.other &&
+                  incoming.isMovieOrSeries)
+          ? incoming.contentType
+          : existing.contentType,
       episodes: existing.episodes.isEmpty
           ? incoming.episodes
           : existing.episodes,

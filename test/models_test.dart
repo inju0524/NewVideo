@@ -91,6 +91,41 @@ void main() {
     ]);
   });
 
+  test('classifies only movies and series as recommendation content', () {
+    final source = MediaSource(
+      id: 'cms-content-type-test',
+      name: 'CMS',
+      endpoint: 'https://media.example/api.php/provide/vod',
+    );
+
+    final movie = MediaItem.fromCms({
+      'vod_id': 'movie',
+      'vod_name': 'Movie',
+      'type_name': '电影片',
+    }, source: source);
+    final series = MediaItem.fromCms({
+      'vod_id': 'series',
+      'vod_name': 'Series',
+      'type_name': '连续剧',
+    }, source: source);
+    final variety = MediaItem.fromCms({
+      'vod_id': 'variety',
+      'vod_name': 'Variety',
+      'type_name': '综艺',
+    }, source: source);
+
+    expect(movie.contentType, MediaContentType.movie);
+    expect(series.contentType, MediaContentType.series);
+    expect(variety.contentType, MediaContentType.other);
+    expect(movie.isMovieOrSeries, isTrue);
+    expect(series.isMovieOrSeries, isTrue);
+    expect(variety.isMovieOrSeries, isFalse);
+    expect(
+      MediaItem.fromJson(movie.toJson()).contentType,
+      MediaContentType.movie,
+    );
+  });
+
   test('prefers CMS genre metadata over broad source type names', () {
     final item = MediaItem.fromCms(
       {

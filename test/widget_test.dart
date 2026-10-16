@@ -317,21 +317,31 @@ void main() {
       sourceName: 'Test source',
       durationSeconds: 100,
       progressSeconds: 40,
+      contentType: MediaContentType.movie,
     );
     const featured = MediaItem(
       id: 'home-featured',
       title: 'Featured movie',
       sourceId: 'preset-bfzy',
       sourceName: 'Test source',
+      contentType: MediaContentType.movie,
     );
     const recommended = MediaItem(
       id: 'home-recommended',
       title: 'Recommended movie',
       sourceId: 'preset-bfzy',
       sourceName: 'Test source',
+      contentType: MediaContentType.series,
+    );
+    const excluded = MediaItem(
+      id: 'home-excluded',
+      title: 'Variety show',
+      sourceId: 'preset-bfzy',
+      sourceName: 'Test source',
+      contentType: MediaContentType.other,
     );
     final store = AppStore()
-      ..catalog = const [featured, recommended]
+      ..catalog = const [featured, recommended, excluded]
       ..history = const [watched];
 
     await tester.pumpWidget(
@@ -354,6 +364,7 @@ void main() {
     final recommendationsY = tester.getTopLeft(find.text('为你挑选')).dy;
     expect(bannerY, lessThan(continueY));
     expect(continueY, lessThan(recommendationsY));
+    expect(find.text('Variety show'), findsNothing);
 
     store.dispose();
   });

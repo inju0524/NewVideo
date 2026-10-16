@@ -739,7 +739,10 @@ class HomePage extends StatelessWidget {
     final continuedTitles = store.history
         .map((item) => _continueTitleKey(item.title))
         .toSet();
-    final freshItems = items
+    final recommendationItems = items
+        .where((item) => item.isMovieOrSeries)
+        .toList();
+    final freshItems = recommendationItems
         .where(
           (item) => !continuedTitles.contains(_continueTitleKey(item.title)),
         )
@@ -864,11 +867,15 @@ class HomePage extends StatelessWidget {
                   icon: Icons.movie_filter_outlined,
                   title: hero != null
                       ? '暂时没有更多影片'
+                      : recommendationItems.isEmpty && items.isNotEmpty
+                      ? '暂无电影或电视剧推荐'
                       : store.history.isEmpty
                       ? '片源暂时没有返回影片'
                       : '暂时没有新片推荐',
                   detail: hero != null
                       ? '刷新片源，查看更多影片。'
+                      : recommendationItems.isEmpty && items.isNotEmpty
+                      ? '今日推荐只展示电影和电视剧，其他内容可在分类或搜索中查看。'
                       : store.history.isEmpty
                       ? '刷新片源，或在片源管理中添加其他来源。'
                       : '已看过的影片集中显示在“接着看”中。',

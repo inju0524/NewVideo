@@ -4,6 +4,11 @@ enum SourceKind { cms, m3u, jellyfin, emby }
 
 enum SourceHealth { pending, available, error, unsupported }
 
+/// The broad catalog type used for surfaces that need consistent poster
+/// quality. Genre labels remain separate because a movie or series can have
+/// several genres.
+enum MediaContentType { unknown, movie, series, other }
+
 class SearchOutcome {
   const SearchOutcome({
     required this.enabledSourceCount,
@@ -198,6 +203,7 @@ class MediaItem {
     this.progressSeconds = 0,
     this.progressEpisodeId = '',
     this.progressEpisodeTitle = '',
+    this.contentType = MediaContentType.unknown,
     this.isDemo = false,
   });
 
@@ -220,7 +226,12 @@ class MediaItem {
   final int progressSeconds;
   final String progressEpisodeId;
   final String progressEpisodeTitle;
+  final MediaContentType contentType;
   final bool isDemo;
+
+  bool get isMovieOrSeries =>
+      contentType == MediaContentType.movie ||
+      contentType == MediaContentType.series;
 
   /// All labels used by filters. Legacy items only have [genre].
   List<String> get genreLabels => genres.isNotEmpty
@@ -249,6 +260,7 @@ class MediaItem {
     int? progressSeconds,
     String? progressEpisodeId,
     String? progressEpisodeTitle,
+    MediaContentType? contentType,
   }) {
     return MediaItem(
       id: id,
@@ -270,6 +282,7 @@ class MediaItem {
       progressSeconds: progressSeconds ?? this.progressSeconds,
       progressEpisodeId: progressEpisodeId ?? this.progressEpisodeId,
       progressEpisodeTitle: progressEpisodeTitle ?? this.progressEpisodeTitle,
+      contentType: contentType ?? this.contentType,
       isDemo: isDemo,
     );
   }
@@ -298,6 +311,7 @@ class MediaItem {
     'progressSeconds': progressSeconds,
     'progressEpisodeId': progressEpisodeId,
     'progressEpisodeTitle': progressEpisodeTitle,
+    'contentType': contentType.name,
     'isDemo': isDemo,
   };
 
@@ -322,6 +336,10 @@ class MediaItem {
     final restoredGenres = savedGenres.isNotEmpty
         ? savedGenres
         : normalizeGenres(json['genre']);
+    final contentType = parseMediaContentType(
+      json['contentType'] ?? json['mediaType'] ?? json['type'],
+      remarks: json['remarks'] as String? ?? '',
+    );
     return MediaItem(
       id: json['id'] as String,
       title: json['title'] as String,
@@ -342,6 +360,7 @@ class MediaItem {
       progressSeconds: json['progressSeconds'] as int? ?? 0,
       progressEpisodeId: json['progressEpisodeId'] as String? ?? '',
       progressEpisodeTitle: json['progressEpisodeTitle'] as String? ?? '',
+      contentType: contentType,
       isDemo: json['isDemo'] as bool? ?? false,
     );
   }
@@ -373,6 +392,13 @@ class MediaItem {
       json['genre'],
       json['type_name'],
     ]);
+    final contentType = parseMediaContentType([
+      json['type_name'],
+      json['vod_type_name'],
+      json['vod_type'],
+      json['media_type'],
+      json['type'],
+    ], remarks: _text(json['vod_remarks'] ?? json['remarks']));
     final genres = normalizeGenres(rawClass);
     final episodes = _parseEpisodes(_text(json['vod_play_url']));
 
@@ -399,6 +425,7 @@ class MediaItem {
       remarks: _text(json['vod_remarks'] ?? json['remarks']),
       episodes: episodes,
       posterHeaders: posterHeaders,
+      contentType: contentType,
     );
   }
 
@@ -448,6 +475,109 @@ class MediaItem {
     final seen = <String>{};
     return episodes.where((episode) => seen.add(episode.url)).toList();
   }
+}
+
+/// Converts source-specific broad type labels to the types used by the home
+/// recommendation surface. Unknown labels stay unknown so a source cannot
+/// accidentally put a low-confidence poster into today's recommendations.
+MediaContentType parseMediaContentType(Object? raw, {String remarks = ''}) {
+  if (raw is MediaContentType) return raw;
+  final values = raw is Iterable ? raw : [raw];
+  for (final value in values) {
+    final labels = _text(value).split(RegExp(r'[,，/|、>]+'));
+    for (final label in labels) {
+      final parsed = _parseMediaContentTypeLabel(label);
+      if (parsed != MediaContentType.unknown) return parsed;
+    }
+  }
+  return _parseMediaContentTypeLabel(remarks);
+}
+
+MediaContentType _parseMediaContentTypeLabel(String raw) {
+  final value = raw.trim().toLowerCase();
+  if (value.isEmpty) return MediaContentType.unknown;
+  if ({
+    'movie',
+    'film',
+    'feature film',
+    '电影',
+    '电影片',
+    '剧情片',
+    '喜剧片',
+    '爱情片',
+    '动作片',
+    '科幻片',
+    '惊悚片',
+    '悬疑片',
+    '恐怖片',
+    '犯罪片',
+    '伦理片',
+    '家庭片',
+    '奇幻片',
+    '战争片',
+    '青春片',
+    '冒险片',
+    '灾难片',
+    '传记片',
+    '历史片',
+    '武侠片',
+    '古装片',
+    '音乐片',
+    '歌舞片',
+  }.contains(value)) {
+    return MediaContentType.movie;
+  }
+  if ({
+    'series',
+    'tv',
+    'tv show',
+    'tvshow',
+    'tv series',
+    'television series',
+    '电视剧',
+    '连续剧',
+    '剧集',
+  }.contains(value)) {
+    return MediaContentType.series;
+  }
+  if ({
+    '综艺',
+    '综艺片',
+    '动漫',
+    '动画',
+    '动画片',
+    '纪录',
+    '纪录片',
+    '短剧',
+    '体育',
+    '资讯',
+    '少儿',
+    'variety',
+    'animation',
+    'anime',
+    'documentary',
+    'short drama',
+    'other',
+  }.contains(value)) {
+    return MediaContentType.other;
+  }
+  if (value.endsWith('剧') &&
+      (value.contains('国产') ||
+          value.contains('大陆') ||
+          value.contains('内地') ||
+          value.contains('港台') ||
+          value.contains('香港') ||
+          value.contains('台湾') ||
+          value.contains('日韩') ||
+          value.contains('韩国') ||
+          value.contains('日本') ||
+          value.contains('泰国') ||
+          value.contains('欧美') ||
+          value.contains('海外') ||
+          value.contains('网'))) {
+    return MediaContentType.series;
+  }
+  return MediaContentType.unknown;
 }
 
 /// Splits source-specific type strings and maps common aliases to the labels
