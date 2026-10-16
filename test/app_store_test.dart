@@ -228,6 +228,7 @@ void main() {
               ],
             }),
             200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
           );
         }),
       );
@@ -404,6 +405,98 @@ void main() {
     },
   );
 
+  test('category pages fill missing poster URLs from CMS details', () async {
+    final source = MediaSource(
+      id: 'cms-category-posters',
+      name: 'Poster category CMS',
+      endpoint: 'https://posters.example/api.php/provide/vod',
+    );
+    final detailRequests = <Uri>[];
+    final requests = <Uri>[];
+    final store = AppStore(
+      client: MockClient((request) async {
+        requests.add(request.url);
+        final query = request.url.queryParameters;
+        if (query['at'] == 'xml') {
+          return http.Response(
+            '<rss><class><ty id="5">恐怖片</ty></class></rss>',
+            200,
+            headers: {'content-type': 'text/xml; charset=utf-8'},
+          );
+        }
+        if (query['ac'] == 'detail') {
+          detailRequests.add(request.url);
+          return http.Response(
+            jsonEncode({
+              'list': [
+                {
+                  'vod_id': 'missing-poster',
+                  'vod_name': 'Missing poster',
+                  'vod_pic': 'https://images.example/restored.jpg',
+                },
+              ],
+            }),
+            200,
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'pagecount': 1,
+            'list': [
+              {
+                'vod_id': 'missing-poster',
+                'vod_name': 'Missing poster',
+                'type_name': '电影片',
+              },
+              {
+                'vod_id': 'has-poster',
+                'vod_name': 'Existing poster',
+                'type_name': '电影片',
+                'vod_pic': 'https://images.example/existing.jpg',
+              },
+            ],
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    )..sources = [source];
+
+    await store.refreshSources();
+    await store.loadMoreCatalog(genres: const ['恐怖']);
+
+    expect(
+      requests
+          .where((uri) => uri.queryParameters['ac'] == 'list')
+          .map((uri) => uri.queryParameters),
+      contains(containsPair('t', '5')),
+      reason: 'Requests: $requests',
+    );
+    final categoryItems = store.categoryMedia
+        .where((item) => item.genreLabels.contains('恐怖'))
+        .toList();
+    expect(
+      detailRequests,
+      hasLength(1),
+      reason:
+          'Requests: $requests; catalog=${store.catalog.map((item) => '${item.title}:${item.posterUrl}')}; category=${categoryItems.map((item) => '${item.title}:${item.posterUrl}')}',
+    );
+    expect(detailRequests.single.queryParameters['ids'], 'missing-poster');
+    expect(
+      categoryItems
+          .singleWhere((item) => item.title == 'Missing poster')
+          .posterUrl,
+      'https://images.example/restored.jpg',
+    );
+    expect(
+      categoryItems
+          .singleWhere((item) => item.title == 'Existing poster')
+          .posterUrl,
+      'https://images.example/existing.jpg',
+    );
+    store.dispose();
+  });
+
   test(
     'category falls back to directory pages when CMS types are unavailable',
     () async {
@@ -443,7 +536,7 @@ void main() {
       requestedPages.clear();
       await store.loadMoreCatalog(genres: const ['喜剧']);
 
-      expect(requestedPages, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      expect(requestedPages, [1, 2]);
       expect(
         store.categoryMedia.where((item) => item.genreLabels.contains('喜剧')),
         isEmpty,
@@ -452,17 +545,27 @@ void main() {
 
       await store.loadMoreCatalog(genres: const ['喜剧']);
 
-      expect(requestedPages, containsAll([11, 12]));
+      expect(requestedPages, [1, 2, 3, 4]);
       expect(
         store.categoryMedia.where((item) => item.genreLabels.contains('喜剧')),
-        hasLength(3),
+        isEmpty,
+      );
+
+      for (var batch = 0; batch < 4; batch++) {
+        await store.loadMoreCatalog(genres: const ['喜剧']);
+      }
+
+      expect(requestedPages, [for (var page = 1; page <= 12; page++) page]);
+      expect(
+        store.categoryMedia.where((item) => item.genreLabels.contains('喜剧')),
+        hasLength(1),
       );
       store.dispose();
     },
   );
 
   test(
-    'catalog refresh loads one fast page and exposes a continuation action',
+    'catalog refresh loads one fast page and category loads two more',
     () async {
       final source = MediaSource(
         id: 'cms-refresh-page-cap',
@@ -498,8 +601,8 @@ void main() {
 
       await store.loadMoreCatalog();
 
-      expect(requestedPages, [1, 2, 3, 4, 5, 6]);
-      expect(store.catalog, hasLength(6));
+      expect(requestedPages, [1, 2, 3]);
+      expect(store.catalog, hasLength(3));
       store.dispose();
     },
   );

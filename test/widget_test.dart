@@ -404,6 +404,167 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('search shares multi-select genres and common category types', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store =
+        AppStore(
+            client: MockClient((_) async => http.Response('{"list":[]}', 200)),
+          )
+          ..sources = [
+            const MediaSource(
+              id: 'search-genres',
+              name: 'Test source',
+              endpoint: 'https://search-genres.example/api.php/provide/vod',
+            ),
+          ]
+          ..catalog = const [
+            MediaItem(
+              id: 'search-genre-horror',
+              title: 'Horror',
+              sourceId: 'search-genres',
+              sourceName: 'Test source',
+              genres: ['恐怖', '悬疑'],
+              year: '2024',
+              region: '中国',
+            ),
+            MediaItem(
+              id: 'search-genre-comedy',
+              title: 'Comedy',
+              sourceId: 'search-genres',
+              sourceName: 'Test source',
+              genres: ['喜剧'],
+            ),
+          ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: SearchPage(store: store, initialQuery: '', onOpenItem: (_) {}),
+      ),
+    );
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'horror');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(ChoiceChip, '伦理'), findsOneWidget);
+    final horror = find.widgetWithText(ChoiceChip, '恐怖');
+    final mystery = find.widgetWithText(ChoiceChip, '悬疑');
+    await tester.ensureVisible(horror);
+    await tester.tap(horror);
+    await tester.pump();
+    await tester.ensureVisible(mystery);
+    await tester.tap(mystery);
+    await tester.pump();
+    expect(find.text('1 部影片'), findsOneWidget);
+    await tester.ensureVisible(find.text('筛选 · 2'));
+    expect(find.text('筛选 · 2'), findsOneWidget);
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+
+    await tester.tap(find.text('筛选 · 2'));
+    await tester.pumpAndSettle();
+    expect(find.text('年份'), findsOneWidget);
+    expect(find.text('地区'), findsOneWidget);
+    expect(find.text('片源'), findsOneWidget);
+    expect(find.text('全部年份'), findsOneWidget);
+    expect(find.text('全部地区'), findsOneWidget);
+    expect(find.text('全部片源'), findsOneWidget);
+    expect(find.byType(DropdownButtonFormField<String>), findsNWidgets(3));
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('2024').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('应用筛选'));
+    await tester.pumpAndSettle();
+    expect(find.text('筛选 · 3'), findsOneWidget);
+
+    store.dispose();
+  });
+
+  testWidgets('category grid loads the next batch when scrolling near bottom', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({});
+    final source = MediaSource(
+      id: 'scroll-category',
+      name: 'Scroll category',
+      endpoint: 'https://scroll.example/api.php/provide/vod',
+    );
+    final requestedPages = <int>[];
+    final store = AppStore(
+      client: MockClient((request) async {
+        final query = request.url.queryParameters;
+        if (query['at'] == 'xml') {
+          return http.Response(
+            '<rss><class><ty id="8">喜剧片</ty></class></rss>',
+            200,
+            headers: {'content-type': 'text/xml; charset=utf-8'},
+          );
+        }
+        if (query['ac'] != 'list') {
+          return http.Response('{"list":[]}', 200);
+        }
+        final page = int.parse(query['pg']!);
+        requestedPages.add(page);
+        return http.Response(
+          jsonEncode({
+            'pagecount': 8,
+            'list': [
+              for (var index = 0; index < 20; index++)
+                {
+                  'vod_id': 'movie-$page-$index',
+                  'vod_name': 'Movie $page $index',
+                  'vod_class': '喜剧片',
+                  'vod_pic': 'https://images.example/$page-$index.jpg',
+                },
+            ],
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    )..sources = [source];
+
+    await store.refreshSources();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(
+          body: CategoriesPage(store: store, onOpenItem: (_) {}),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(requestedPages, [1, 2, 3]);
+    expect(find.text('继续载入分类影片'), findsNothing);
+    final scrollView = tester.widget<CustomScrollView>(
+      find.byType(CustomScrollView).first,
+    );
+    final position = scrollView.controller!.position;
+    await tester.drag(
+      find.byType(CustomScrollView).first,
+      Offset(0, -position.maxScrollExtent - 800),
+    );
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(requestedPages.take(5), [1, 2, 3, 4, 5]);
+    expect(requestedPages.length.isOdd, isTrue);
+    expect(find.byType(PosterCard), findsWidgets);
+    store.dispose();
+  });
+
   testWidgets('category zero-results can load later catalog pages', (
     tester,
   ) async {

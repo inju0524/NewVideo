@@ -33,9 +33,9 @@ class AppStore extends ChangeNotifier {
   static const _motionKey = 'zhuying.reduceMotion.v1';
   static const _autoplayKey = 'zhuying.autoplayNext.v1';
   static const _initialCatalogPages = 1;
-  static const _catalogPagesPerLoadMore = 5;
-  static const _maxCategoryPagesPerLoad = 10;
-  static const _categoryResultTarget = 18;
+  static const _catalogPagesPerLoadMore = 2;
+  static const _maxCategoryPagesPerLoad = 2;
+  static const _categoryResultTarget = 36;
   static const _maxCatalogPages = 200;
   static const _cmsDetailBatchSize = 100;
   static const _defaultCmsPageSize = 20;
@@ -77,6 +77,9 @@ class AppStore extends ChangeNotifier {
   final Map<String, Map<String, int>> _categoryNextPagesByQuery = {};
   final Set<String> _loadedCategoryQueries = {};
   final Map<String, List<_CmsTypeCategory>> _cmsTypeCategories = {};
+  final Map<String, Map<String, Map<String, dynamic>>>
+  _cmsPosterDetailsBySource = {};
+  final Map<String, Set<String>> _cmsPosterDetailsAttemptedBySource = {};
   ({List<String> genres, String? year, String? region, String? sourceName})?
   _queuedCategoryQuery;
   int _searchGeneration = 0;
@@ -107,16 +110,7 @@ class AppStore extends ChangeNotifier {
         merged[item.id] = item;
         continue;
       }
-      final genres = normalizeGenres([
-        ...existing.genreLabels,
-        ...item.genreLabels,
-      ]);
-      if (genres.length != existing.genreLabels.length) {
-        merged[item.id] = existing.copyWith(
-          genre: genres.isEmpty ? '' : genres.first,
-          genres: genres,
-        );
-      }
+      merged[item.id] = _mergeMediaItem(existing, item);
     }
     return merged.values.toList();
   }
@@ -388,9 +382,13 @@ class AppStore extends ChangeNotifier {
     String? year,
     String? region,
     String? sourceName,
+    int pageLimit = _catalogPagesPerLoadMore,
   }) async {
     final selectedGenres = normalizeGenres(genres).toSet();
-    if (selectedGenres.isNotEmpty) {
+    if (selectedGenres.isNotEmpty ||
+        year != null ||
+        region != null ||
+        sourceName != null) {
       await _loadMoreGenreCatalog(
         genres: selectedGenres,
         year: year,
@@ -438,8 +436,8 @@ class AppStore extends ChangeNotifier {
         (entry) => _fetchSource(
           entry.source!,
           startPage: entry.page,
-          pageLimit: _catalogPagesPerLoadMore,
-          fetchMissingPosters: false,
+          pageLimit: pageLimit,
+          fetchMissingPosters: true,
           onItems: (items) => publish(entry.source!, items),
         ),
       );
@@ -534,7 +532,8 @@ class AppStore extends ChangeNotifier {
       }
       bool hasEnoughItems() {
         final matches = _categoryItemsByQuery[queryKey]?.values.where((item) {
-          return (year == null || item.year == year) &&
+          return (genres.isEmpty || item.genreLabels.any(genres.contains)) &&
+              (year == null || item.year == year) &&
               (region == null || item.region == region) &&
               (sourceName == null || item.sourceName == sourceName);
         }).length;
@@ -569,7 +568,7 @@ class AppStore extends ChangeNotifier {
                     year: year,
                     region: region,
                     trackCatalogPagination: false,
-                    fetchMissingPosters: false,
+                    fetchMissingPosters: true,
                   )
                 : await _fetchMediaServer(
                     source,
@@ -614,12 +613,13 @@ class AppStore extends ChangeNotifier {
             continue;
           }
           for (final item in routeResult.result.items) {
-            final genreMatch = item.genreLabels.any(genres.contains);
+            final genreMatch =
+                genres.isEmpty || item.genreLabels.any(genres.contains);
             if (genreMatch &&
                 (year == null || item.year == year) &&
                 (region == null || item.region == region) &&
                 (sourceName == null || item.sourceName == sourceName)) {
-              queryItems[item.id] = item;
+              queryItems[item.id] = _mergeMediaItem(queryItems[item.id], item);
             }
           }
           if (routeResult.result.nextPage case final nextPage?) {
@@ -1285,10 +1285,23 @@ class AppStore extends ChangeNotifier {
           missingPosterIds.add(id);
         }
       }
+      final posterDetails = _cmsPosterDetailsBySource.putIfAbsent(
+        source.id,
+        () => <String, Map<String, dynamic>>{},
+      );
+      final attemptedPosterIds = _cmsPosterDetailsAttemptedBySource.putIfAbsent(
+        source.id,
+        () => <String>{},
+      );
       final ids = query == null && fetchMissingPosters
-          ? missingPosterIds.toList()
+          ? missingPosterIds
+                .where((id) => !attemptedPosterIds.contains(id))
+                .toList()
           : <String>[];
-      final detailsById = <String, Map<String, dynamic>>{};
+      final detailsById = <String, Map<String, dynamic>>{
+        for (final entry in posterDetails.entries)
+          if (missingPosterIds.contains(entry.key)) entry.key: entry.value,
+      };
       if (ids.isNotEmpty) {
         for (var start = 0; start < ids.length; start += _cmsDetailBatchSize) {
           final end = start + _cmsDetailBatchSize > ids.length
@@ -1306,9 +1319,13 @@ class AppStore extends ChangeNotifier {
             for (final row in _extractRows(detailResponse).whereType<Map>()) {
               final id = (row['vod_id'] ?? row['id'])?.toString();
               if (id != null) {
-                detailsById[id] = Map<String, dynamic>.from(row);
+                final details = Map<String, dynamic>.from(row);
+                detailsById[id] = details;
+                final posterFields = _cmsPosterFields(details);
+                if (posterFields.isNotEmpty) posterDetails[id] = posterFields;
               }
             }
+            attemptedPosterIds.addAll(ids.sublist(start, end));
             final batchDetails = <String, Map<String, dynamic>>{};
             for (final id in ids.sublist(start, end)) {
               final details = detailsById[id];
@@ -1362,6 +1379,29 @@ class AppStore extends ChangeNotifier {
         const [],
       );
     }
+  }
+
+  static Map<String, dynamic> _cmsPosterFields(Map<String, dynamic> row) {
+    const posterKeys = {
+      'vod_pic',
+      'pic',
+      'cover',
+      'vod_pic_thumb',
+      'vod_pic_small',
+      'pic_thumb',
+      'pic_small',
+      'vod_thumb',
+      'cover_thumb',
+      'cover_small',
+      'thumbnail',
+      'thumb',
+    };
+    return {
+      for (final entry in row.entries)
+        if (posterKeys.contains(entry.key) &&
+            entry.value?.toString().trim().isNotEmpty == true)
+          entry.key: entry.value,
+    };
   }
 
   Future<_CmsPage> _fetchCmsPage(
@@ -1895,8 +1935,46 @@ class AppStore extends ChangeNotifier {
   }
 
   static List<MediaItem> _uniqueItems(Iterable<MediaItem> items) {
-    final seen = <String>{};
-    return items.where((item) => seen.add(item.id)).toList();
+    final unique = <String, MediaItem>{};
+    for (final item in items) {
+      unique.update(
+        item.id,
+        (existing) => _mergeMediaItem(existing, item),
+        ifAbsent: () => item,
+      );
+    }
+    return unique.values.toList();
+  }
+
+  static MediaItem _mergeMediaItem(MediaItem? existing, MediaItem incoming) {
+    if (existing == null) return incoming;
+    final genres = normalizeGenres([
+      ...existing.genreLabels,
+      ...incoming.genreLabels,
+    ]);
+    return existing.copyWith(
+      posterUrl: existing.posterUrl.isEmpty
+          ? incoming.posterUrl
+          : existing.posterUrl,
+      thumbnailUrl: existing.thumbnailUrl.isEmpty
+          ? incoming.thumbnailUrl
+          : existing.thumbnailUrl,
+      year: existing.year.isEmpty ? incoming.year : existing.year,
+      region: existing.region.isEmpty ? incoming.region : existing.region,
+      genre: genres.isEmpty ? existing.genre : genres.first,
+      genres: genres,
+      rating: existing.rating.isEmpty ? incoming.rating : existing.rating,
+      description: existing.description.isEmpty
+          ? incoming.description
+          : existing.description,
+      remarks: existing.remarks.isEmpty ? incoming.remarks : existing.remarks,
+      episodes: existing.episodes.isEmpty
+          ? incoming.episodes
+          : existing.episodes,
+      posterHeaders: existing.posterHeaders.isEmpty
+          ? incoming.posterHeaders
+          : existing.posterHeaders,
+    );
   }
 
   @override

@@ -9,7 +9,7 @@ import '../models.dart';
 import '../source_importer.dart';
 import 'widgets.dart';
 
-const _commonGenres = [
+const commonGenres = [
   '剧情',
   '喜剧',
   '爱情',
@@ -51,19 +51,181 @@ class CategoriesPage extends StatefulWidget {
 }
 
 class _CategoriesPageState extends State<CategoriesPage> {
+  final ScrollController _scrollController = ScrollController();
   Set<String> _genres = {};
   String _year = '全部年份';
   String _region = '全部地区';
   String _source = '全部片源';
   bool _showMoreGenres = false;
+  bool _didPrefetchCatalog = false;
+  bool _userScrollArmed = false;
+  int _underfilledBatches = 0;
+  bool _underfilledFillScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+    widget.store.addListener(_onStoreChanged);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _maybePrefetchCatalog(),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant CategoriesPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store != widget.store) {
+      oldWidget.store.removeListener(_onStoreChanged);
+      widget.store.addListener(_onStoreChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.store.removeListener(_onStoreChanged);
+    _scrollController
+      ..removeListener(_onScroll)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onStoreChanged() {
+    if (!mounted) return;
+    setState(() {});
+    _maybePrefetchCatalog();
+    _scheduleUnderfilledFill();
+    _onScroll();
+  }
+
+  void _maybePrefetchCatalog() {
+    if (_didPrefetchCatalog ||
+        _hasServerFilters ||
+        widget.store.isRefreshing ||
+        widget.store.isLoadingMoreCatalog ||
+        !widget.store.hasMoreCatalog) {
+      return;
+    }
+    _didPrefetchCatalog = true;
+    unawaited(_loadNextBatch());
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients ||
+        !_userScrollArmed ||
+        _scrollController.position.extentAfter > 520 ||
+        widget.store.isLoadingMoreCatalog ||
+        !_hasMore) {
+      return;
+    }
+    _userScrollArmed = false;
+    unawaited(_loadSelectedCategory());
+  }
+
+  bool _onScrollNotification(ScrollNotification notification) {
+    if (notification is ScrollUpdateNotification &&
+        notification.dragDetails != null) {
+      _userScrollArmed = true;
+      _onScroll();
+    }
+    return false;
+  }
+
+  bool get _hasServerFilters =>
+      _genres.isNotEmpty ||
+      _year != '全部年份' ||
+      _region != '全部地区' ||
+      _source != '全部片源';
+
+  int get _visibleItemTarget {
+    final width = MediaQuery.sizeOf(context).width;
+    final columns = width >= 1280
+        ? 7
+        : width >= 1000
+        ? 6
+        : width >= 760
+        ? 5
+        : width >= 520
+        ? 4
+        : 3;
+    return columns * 4;
+  }
+
+  bool _matchesFilters(MediaItem item) {
+    final genreMatch =
+        _genres.isEmpty ||
+        normalizeGenres(item.genreLabels).any(_genres.contains);
+    return genreMatch &&
+        (_year == '全部年份' || item.year == _year) &&
+        (_region == '全部地区' || item.region == _region) &&
+        (_source == '全部片源' || item.sourceName == _source);
+  }
+
+  bool get _hasMore => _hasServerFilters
+      ? widget.store.hasMoreCategoryPages(
+          genres: _genres,
+          year: _year == '全部年份' ? null : _year,
+          region: _region == '全部地区' ? null : _region,
+          sourceName: _source == '全部片源' ? null : _source,
+        )
+      : widget.store.hasMoreCatalog;
+
+  void _scheduleUnderfilledFill() {
+    final matchingCount = widget.store.categoryMedia
+        .where(_matchesFilters)
+        .length;
+    if (!_hasServerFilters ||
+        !_hasMore ||
+        matchingCount >= _visibleItemTarget ||
+        widget.store.isLoadingMoreCatalog ||
+        _underfilledBatches >= 2 ||
+        _underfilledFillScheduled) {
+      return;
+    }
+    _underfilledFillScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _underfilledFillScheduled = false;
+      if (!mounted ||
+          widget.store.isLoadingMoreCatalog ||
+          !_hasMore ||
+          widget.store.categoryMedia.where(_matchesFilters).length >=
+              _visibleItemTarget) {
+        return;
+      }
+      _underfilledBatches++;
+      unawaited(_loadSelectedCategory());
+    });
+  }
+
+  Future<void> _loadNextBatch() => widget.store.loadMoreCatalog(
+    genres: _genres,
+    year: _year == '全部年份' ? null : _year,
+    region: _region == '全部地区' ? null : _region,
+    sourceName: _source == '全部片源' ? null : _source,
+    pageLimit: 2,
+  );
+
+  Future<void> _loadSelectedCategory() => _loadNextBatch();
+
+  void _resetEmptySearchBudget() {
+    _underfilledBatches = 0;
+    _userScrollArmed = false;
+  }
+
+  void _toggleGenre(String genre) {
+    setState(() {
+      final next = {..._genres};
+      if (!next.add(genre)) next.remove(genre);
+      _genres = next;
+      _resetEmptySearchBudget();
+    });
+    if (_hasServerFilters) unawaited(_loadSelectedCategory());
+  }
 
   @override
   Widget build(BuildContext context) {
     final availableItems = widget.store.categoryMedia;
     final discoveredGenres = _genresFromItems(availableItems);
-    final moreGenres = discoveredGenres
-        .where((genre) => !_commonGenres.contains(genre))
-        .toList();
     final sources = [
       '全部片源',
       ...widget.store.enabledSources.map((source) => source.name).toSet(),
@@ -72,272 +234,336 @@ class _CategoriesPageState extends State<CategoriesPage> {
       ..insert(0, '全部年份');
     final regions = _sortedValues(availableItems.map((item) => item.region))
       ..insert(0, '全部地区');
-    final items = availableItems.where((item) {
-      final genreMatch =
-          _genres.isEmpty ||
-          normalizeGenres(item.genreLabels).any(_genres.contains);
-      final yearMatch = _year == '全部年份' || item.year == _year;
-      final regionMatch = _region == '全部地区' || item.region == _region;
-      final sourceMatch = _source == '全部片源' || item.sourceName == _source;
-      return genreMatch && yearMatch && regionMatch && sourceMatch;
-    }).toList();
+    final items = availableItems.where(_matchesFilters).toList();
     final activeFilterCount =
         _genres.length +
         (_year == '全部年份' ? 0 : 1) +
         (_region == '全部地区' ? 0 : 1) +
         (_source == '全部片源' ? 0 : 1);
-    final gridKey = [
-      ..._genres.toList()..sort(),
-      _year,
-      _region,
-      _source,
-      ...items.take(3).map((item) => item.id),
-    ].join('|');
-    final hasMore = _genres.isEmpty
-        ? widget.store.hasMoreCatalog
-        : widget.store.hasMoreCategoryPages(
-            genres: _genres,
-            year: _year == '全部年份' ? null : _year,
-            region: _region == '全部地区' ? null : _region,
-            sourceName: _source == '全部片源' ? null : _source,
-          );
+    final hasMore = _hasMore;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scheduleUnderfilledFill();
+    });
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(28, 28, 28, 36),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SectionTitle(title: '片库分类'),
-          const SizedBox(height: 22),
-          Wrap(
-            spacing: 7,
-            runSpacing: 7,
-            children: [
-              _FilterChoice(
-                label: '全部',
-                selected: _genres.isEmpty,
-                onTap: () => setState(() => _genres = {}),
-              ),
-              ..._commonGenres.map((genre) {
-                return _FilterChoice(
-                  label: genre,
-                  selected: _genres.contains(genre),
-                  onTap: () => _toggleGenre(genre),
-                );
-              }),
-              if (moreGenres.isNotEmpty)
-                TextButton.icon(
-                  onPressed: () =>
-                      setState(() => _showMoreGenres = !_showMoreGenres),
-                  icon: Icon(
-                    _showMoreGenres
-                        ? Icons.expand_less_rounded
-                        : Icons.expand_more_rounded,
-                    size: 17,
+    return NotificationListener<ScrollNotification>(
+      onNotification: _onScrollNotification,
+      child: CustomScrollView(
+        controller: _scrollController,
+        slivers: [
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(28, 28, 28, 0),
+            sliver: SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SectionTitle(title: '片库分类'),
+                  const SizedBox(height: 22),
+                  GenreFilterBar(
+                    genres: discoveredGenres,
+                    selected: _genres,
+                    expanded: _showMoreGenres,
+                    allLabel: '全部',
+                    onExpandedChanged: (value) =>
+                        setState(() => _showMoreGenres = value),
+                    onToggle: _toggleGenre,
+                    onClear: () => setState(() => _genres = {}),
                   ),
-                  label: Text(_showMoreGenres ? '收起更多' : '更多类型'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: ZhuyingColors.muted,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
-            ],
-          ),
-          AnimatedSize(
-            duration: motionDuration(
-              context,
-              widget.store.reduceMotion,
-              const Duration(milliseconds: 200),
-            ),
-            curve: Curves.easeInOutCubic,
-            alignment: Alignment.topCenter,
-            child: _showMoreGenres
-                ? Padding(
-                    padding: const EdgeInsets.only(top: 7),
-                    child: Wrap(
-                      spacing: 7,
-                      runSpacing: 7,
-                      children: moreGenres
-                          .map(
-                            (genre) => _FilterChoice(
-                              label: genre,
-                              selected: _genres.contains(genre),
-                              onTap: () => _toggleGenre(genre),
-                            ),
-                          )
-                          .toList(),
-                    ),
-                  )
-                : const SizedBox(width: double.infinity),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              OutlinedButton.icon(
-                onPressed: () async {
-                  final selection =
-                      await showModalBottomSheet<_CategoryFilterSelection>(
-                        context: context,
-                        useSafeArea: true,
-                        isScrollControlled: true,
-                        builder: (context) => _CategoryFilterSheet(
-                          years: years,
-                          regions: regions,
-                          sources: sources,
-                          initial: _CategoryFilterSelection(
-                            year: _year,
-                            region: _region,
-                            source: _source,
-                          ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final selection =
+                              await showModalBottomSheet<
+                                _CategoryFilterSelection
+                              >(
+                                context: context,
+                                useSafeArea: true,
+                                isScrollControlled: true,
+                                builder: (context) => _CategoryFilterSheet(
+                                  years: years,
+                                  regions: regions,
+                                  sources: sources,
+                                  initial: _CategoryFilterSelection(
+                                    year: _year,
+                                    region: _region,
+                                    source: _source,
+                                  ),
+                                ),
+                              );
+                          if (selection == null || !mounted) return;
+                          setState(() {
+                            _year = selection.year;
+                            _region = selection.region;
+                            _source = selection.source;
+                            _resetEmptySearchBudget();
+                          });
+                          unawaited(_loadSelectedCategory());
+                        },
+                        icon: const Icon(Icons.tune_rounded, size: 18),
+                        label: Text(
+                          activeFilterCount == 0
+                              ? '筛选'
+                              : '筛选 · $activeFilterCount',
                         ),
-                      );
-                  if (selection == null || !mounted) return;
-                  setState(() {
-                    _year = selection.year;
-                    _region = selection.region;
-                    _source = selection.source;
-                  });
-                  if (_genres.isNotEmpty) _loadSelectedCategory();
-                },
-                icon: const Icon(Icons.tune_rounded, size: 18),
-                label: Text(
-                  activeFilterCount == 0 ? '筛选' : '筛选 · $activeFilterCount',
-                ),
+                      ),
+                      if (activeFilterCount > 0) ...[
+                        const SizedBox(width: 8),
+                        TextButton(
+                          onPressed: () {
+                            setState(() {
+                              _genres = {};
+                              _year = '全部年份';
+                              _region = '全部地区';
+                              _source = '全部片源';
+                              _resetEmptySearchBudget();
+                            });
+                          },
+                          child: const Text('重置'),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 22),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(
+                        '${items.length} 部影片',
+                        style: const TextStyle(
+                          color: ZhuyingColors.text,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        widget.store.isLoadingMoreCatalog
+                            ? '已载入 ${availableItems.length} 部 · 正在继续加载'
+                            : '已载入 ${availableItems.length} 部',
+                        style: const TextStyle(
+                          color: ZhuyingColors.muted,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                ],
               ),
-              if (activeFilterCount > 0) ...[
-                const SizedBox(width: 8),
-                TextButton(
-                  onPressed: () => setState(() {
-                    _genres = {};
-                    _year = '全部年份';
-                    _region = '全部地区';
-                    _source = '全部片源';
-                  }),
-                  child: const Text('重置'),
-                ),
-              ],
-            ],
+            ),
           ),
-          const SizedBox(height: 22),
-          Wrap(
-            spacing: 12,
-            runSpacing: 4,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Text(
-                '${items.length} 部影片',
-                style: const TextStyle(
-                  color: ZhuyingColors.text,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              Text(
-                widget.store.isLoadingMoreCatalog
-                    ? '已载入 ${availableItems.length} 部 · 正在继续加载'
-                    : hasMore
-                    ? '已载入 ${availableItems.length} 部 · 还有更多'
-                    : '已载入 ${availableItems.length} 部',
-                style: const TextStyle(
-                  color: ZhuyingColors.muted,
-                  fontSize: 11,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
           if (items.isNotEmpty)
-            _PageGrid(
-              key: ValueKey('category-$gridKey'),
-              items: items,
-              store: widget.store,
-              onOpenItem: widget.onOpenItem,
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(28, 14, 28, 0),
+              sliver: SliverLayoutBuilder(
+                builder: (context, constraints) {
+                  final width = constraints.crossAxisExtent;
+                  final columns = width >= 1280
+                      ? 7
+                      : width >= 1000
+                      ? 6
+                      : width >= 760
+                      ? 5
+                      : width >= 520
+                      ? 4
+                      : 3;
+                  return SliverGrid.builder(
+                    itemCount: items.length,
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: columns,
+                      crossAxisSpacing: 14,
+                      mainAxisSpacing: 17,
+                      childAspectRatio: 0.48,
+                    ),
+                    itemBuilder: (context, index) {
+                      final item = items[index];
+                      return PosterCard(
+                        key: ValueKey(item.id),
+                        item: item,
+                        onTap: () => widget.onOpenItem(item),
+                        favorite: widget.store.favorites.contains(item.id),
+                        onFavorite: () => widget.store.toggleFavorite(item),
+                        reduceMotion: widget.store.reduceMotion,
+                      );
+                    },
+                  );
+                },
+              ),
             )
           else if (availableItems.isEmpty)
-            EmptyState(
-              icon: widget.store.isRefreshing
-                  ? Icons.downloading_rounded
-                  : Icons.video_library_outlined,
-              title: widget.store.isRefreshing ? '正在载入片库' : '片库暂时没有影片',
-              detail: widget.store.isRefreshing
-                  ? '影片载入后会显示在这里。'
-                  : widget.store.refreshMessage ?? '刷新片源后再试。',
-              action: widget.store.isRefreshing
-                  ? null
-                  : TextButton.icon(
-                      onPressed: widget.store.refreshSources,
-                      icon: const Icon(Icons.refresh_rounded),
-                      label: const Text('刷新片源'),
-                    ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(28, 20, 28, 0),
+              sliver: SliverToBoxAdapter(
+                child: EmptyState(
+                  icon: widget.store.isRefreshing
+                      ? Icons.downloading_rounded
+                      : Icons.video_library_outlined,
+                  title: widget.store.isRefreshing ? '正在载入片库' : '片库暂时没有影片',
+                  detail: widget.store.isRefreshing
+                      ? '影片载入后会显示在这里。'
+                      : widget.store.refreshMessage ?? '刷新片源后再试。',
+                  action: widget.store.isRefreshing
+                      ? null
+                      : TextButton.icon(
+                          onPressed: widget.store.refreshSources,
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: const Text('刷新片源'),
+                        ),
+                ),
+              ),
             )
           else
-            EmptyState(
-              icon: Icons.filter_alt_off_outlined,
-              title: '当前已加载影片中没有匹配项',
-              detail: hasMore
-                  ? '已载入 ${availableItems.length} 部，继续加载可能找到符合条件的影片。'
-                  : '已检查当前可用的 ${availableItems.length} 部影片，可重置或调整筛选条件。',
-              action: hasMore
-                  ? _loadMoreButton()
-                  : TextButton.icon(
-                      onPressed: () => setState(() {
-                        _genres = {};
-                        _year = '全部年份';
-                        _region = '全部地区';
-                        _source = '全部片源';
-                      }),
-                      icon: const Icon(Icons.filter_alt_off_outlined),
-                      label: const Text('重置筛选'),
-                    ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(28, 20, 28, 0),
+              sliver: SliverToBoxAdapter(
+                child: EmptyState(
+                  icon: Icons.filter_alt_off_outlined,
+                  title: '当前已加载影片中没有匹配项',
+                  detail: hasMore
+                      ? '正在后台查找符合条件的影片。'
+                      : '已检查当前可用的 ${availableItems.length} 部影片，可重置或调整筛选条件。',
+                  action: !hasMore
+                      ? TextButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _genres = {};
+                              _year = '全部年份';
+                              _region = '全部地区';
+                              _source = '全部片源';
+                              _resetEmptySearchBudget();
+                            });
+                          },
+                          icon: const Icon(Icons.filter_alt_off_outlined),
+                          label: const Text('重置筛选'),
+                        )
+                      : null,
+                ),
+              ),
             ),
-          if (items.isNotEmpty && hasMore)
-            Padding(
-              padding: const EdgeInsets.only(top: 22),
-              child: _loadMoreButton(),
+          if (widget.store.isLoadingMoreCatalog || hasMore)
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(28, 24, 28, 36),
+              sliver: SliverToBoxAdapter(
+                child: Center(
+                  child: widget.store.isLoadingMoreCatalog
+                      ? const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            SizedBox(width: 10),
+                            Text('正在加载影片…'),
+                          ],
+                        )
+                      : const SizedBox(height: 2),
+                ),
+              ),
             ),
+          const SliverToBoxAdapter(child: SizedBox(height: 36)),
         ],
       ),
     );
   }
+}
 
-  Widget _loadMoreButton() {
-    return OutlinedButton.icon(
-      onPressed: widget.store.isLoadingMoreCatalog
-          ? null
-          : () => widget.store.loadMoreCatalog(
-              genres: _genres,
-              year: _year == '全部年份' ? null : _year,
-              region: _region == '全部地区' ? null : _region,
-              sourceName: _source == '全部片源' ? null : _source,
+class GenreFilterBar extends StatelessWidget {
+  const GenreFilterBar({
+    required this.genres,
+    required this.selected,
+    required this.expanded,
+    required this.allLabel,
+    required this.onExpandedChanged,
+    required this.onToggle,
+    required this.onClear,
+    super.key,
+  });
+
+  final List<String> genres;
+  final Set<String> selected;
+  final bool expanded;
+  final String allLabel;
+  final ValueChanged<bool> onExpandedChanged;
+  final ValueChanged<String> onToggle;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final additional = genres
+        .where((genre) => !commonGenres.contains(genre))
+        .toList();
+    final visibleCommon = <String>{
+      ...commonGenres,
+      ...selected.where((genre) => !commonGenres.contains(genre)),
+    }.toList();
+    final allSelected = selected.isEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 7,
+          runSpacing: 7,
+          children: [
+            _FilterChoice(
+              label: allLabel,
+              selected: allSelected,
+              onTap: onClear,
             ),
-      icon: widget.store.isLoadingMoreCatalog
-          ? const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          : const Icon(Icons.downloading_rounded, size: 18),
-      label: Text(widget.store.isLoadingMoreCatalog ? '正在加载' : '继续载入分类影片'),
-    );
-  }
-
-  void _toggleGenre(String genre) {
-    setState(() {
-      final next = {..._genres};
-      if (!next.add(genre)) next.remove(genre);
-      _genres = next;
-    });
-    if (_genres.isNotEmpty) _loadSelectedCategory();
-  }
-
-  void _loadSelectedCategory() {
-    unawaited(
-      widget.store.loadMoreCatalog(
-        genres: _genres,
-        year: _year == '全部年份' ? null : _year,
-        region: _region == '全部地区' ? null : _region,
-        sourceName: _source == '全部片源' ? null : _source,
-      ),
+            for (final genre in visibleCommon)
+              _FilterChoice(
+                label: genre,
+                selected: selected.contains(genre),
+                onTap: () => onToggle(genre),
+              ),
+            if (additional.isNotEmpty)
+              TextButton.icon(
+                onPressed: () => onExpandedChanged(!expanded),
+                icon: Icon(
+                  expanded
+                      ? Icons.expand_less_rounded
+                      : Icons.expand_more_rounded,
+                  size: 17,
+                ),
+                label: Text(expanded ? '收起更多' : '更多类型'),
+                style: TextButton.styleFrom(
+                  foregroundColor: ZhuyingColors.muted,
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+          ],
+        ),
+        AnimatedSize(
+          duration: motionDuration(
+            context,
+            false,
+            const Duration(milliseconds: 200),
+          ),
+          curve: Curves.easeInOutCubic,
+          alignment: Alignment.topCenter,
+          child: expanded && additional.isNotEmpty
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 7),
+                  child: Wrap(
+                    spacing: 7,
+                    runSpacing: 7,
+                    children: [
+                      for (final genre in additional)
+                        _FilterChoice(
+                          label: genre,
+                          selected: selected.contains(genre),
+                          onTap: () => onToggle(genre),
+                        ),
+                    ],
+                  ),
+                )
+              : const SizedBox(width: double.infinity),
+        ),
+      ],
     );
   }
 }
@@ -544,7 +770,8 @@ class _SearchPageState extends State<SearchPage> {
   late final FocusNode _focusNode;
   Timer? _debounce;
   List<MediaItem> _results = const [];
-  String _genre = '全部类型';
+  Set<String> _genres = {};
+  bool _showAllSearchGenres = false;
   String _source = '全部片源';
   String _year = '全部年份';
   String _region = '全部地区';
@@ -637,7 +864,8 @@ class _SearchPageState extends State<SearchPage> {
     final queryChanged = term != _activeTerm;
     if (queryChanged) {
       _activeTerm = term;
-      _genre = '全部类型';
+      _genres = {};
+      _showAllSearchGenres = false;
       _source = '全部片源';
       _year = '全部年份';
       _region = '全部地区';
@@ -711,11 +939,7 @@ class _SearchPageState extends State<SearchPage> {
 
   @override
   Widget build(BuildContext context) {
-    final genres = [
-      '全部类型',
-      ..._results.expand((item) => item.genreLabels).toSet().toList()..sort(),
-    ];
-    final activeGenre = genres.contains(_genre) ? _genre : '全部类型';
+    final discoveredGenres = _genresFromItems(_results);
     final sources = [
       '全部片源',
       ...widget.store.enabledSources.map((source) => source.name).toSet(),
@@ -725,12 +949,17 @@ class _SearchPageState extends State<SearchPage> {
     final regions = _sortedValues(_results.map((item) => item.region))
       ..insert(0, '全部地区');
     final filtered = _results.where((item) {
-      return (activeGenre == '全部类型' ||
-              item.genreLabels.contains(activeGenre)) &&
+      return (_genres.isEmpty ||
+              normalizeGenres(item.genreLabels).any(_genres.contains)) &&
           (_year == '全部年份' || item.year == _year) &&
           (_region == '全部地区' || item.region == _region) &&
           (_source == '全部片源' || item.sourceName == _source);
     }).toList();
+    final activeFilterCount =
+        _genres.length +
+        (_year == '全部年份' ? 0 : 1) +
+        (_region == '全部地区' ? 0 : 1) +
+        (_source == '全部片源' ? 0 : 1);
 
     return Scaffold(
       backgroundColor: ZhuyingColors.canvas,
@@ -809,44 +1038,69 @@ class _SearchPageState extends State<SearchPage> {
                       ),
                     if (_controller.text.isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          for (final genre in genres.take(8))
-                            _FilterChoice(
-                              label: genre,
-                              selected: genre == activeGenre,
-                              onTap: () => setState(() => _genre = genre),
-                            ),
-                        ],
+                      GenreFilterBar(
+                        genres: discoveredGenres,
+                        selected: _genres,
+                        expanded: _showAllSearchGenres,
+                        allLabel: '全部类型',
+                        onExpandedChanged: (value) =>
+                            setState(() => _showAllSearchGenres = value),
+                        onToggle: (genre) => setState(() {
+                          final next = {..._genres};
+                          if (!next.add(genre)) next.remove(genre);
+                          _genres = next;
+                        }),
+                        onClear: () => setState(() => _genres = {}),
                       ),
                       const SizedBox(height: 8),
                       Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
+                        spacing: 10,
+                        runSpacing: 6,
                         children: [
-                          _FilterDropdown(
-                            label: _year,
-                            options: years,
-                            icon: Icons.calendar_month_outlined,
-                            onChanged: (value) => setState(() => _year = value),
+                          OutlinedButton.icon(
+                            onPressed: () async {
+                              final selection =
+                                  await showModalBottomSheet<
+                                    _CategoryFilterSelection
+                                  >(
+                                    context: context,
+                                    useSafeArea: true,
+                                    isScrollControlled: true,
+                                    builder: (context) => _CategoryFilterSheet(
+                                      years: years,
+                                      regions: regions,
+                                      sources: sources,
+                                      initial: _CategoryFilterSelection(
+                                        year: _year,
+                                        region: _region,
+                                        source: _source,
+                                      ),
+                                    ),
+                                  );
+                              if (selection == null || !mounted) return;
+                              setState(() {
+                                _year = selection.year;
+                                _region = selection.region;
+                                _source = selection.source;
+                              });
+                            },
+                            icon: const Icon(Icons.tune_rounded, size: 17),
+                            label: Text(
+                              activeFilterCount == 0
+                                  ? '筛选'
+                                  : '筛选 · $activeFilterCount',
+                            ),
                           ),
-                          _FilterDropdown(
-                            label: _region,
-                            options: regions,
-                            icon: Icons.public_outlined,
-                            onChanged: (value) =>
-                                setState(() => _region = value),
-                          ),
-                          _FilterDropdown(
-                            label: _source,
-                            options: sources,
-                            icon: Icons.lan_outlined,
-                            onChanged: (value) =>
-                                setState(() => _source = value),
-                          ),
+                          if (activeFilterCount > 0)
+                            TextButton(
+                              onPressed: () => setState(() {
+                                _genres = {};
+                                _year = '全部年份';
+                                _region = '全部地区';
+                                _source = '全部片源';
+                              }),
+                              child: const Text('重置'),
+                            ),
                         ],
                       ),
                       const SizedBox(height: 24),
@@ -931,7 +1185,7 @@ class _SearchPageState extends State<SearchPage> {
                       if (filtered.isNotEmpty)
                         _PageGrid(
                           key: ValueKey(
-                            'search-$activeGenre-$_year-$_region-$_source-${filtered.map((item) => item.id).take(3).join(',')}',
+                            'search-${_genres.toList()..sort()}-$_year-$_region-$_source-${filtered.map((item) => item.id).take(3).join(',')}',
                           ),
                           items: filtered,
                           store: widget.store,
@@ -1722,47 +1976,6 @@ class _FilterChoice extends StatelessWidget {
       backgroundColor: ZhuyingColors.surface,
       selectedColor: ZhuyingColors.amber.withValues(alpha: 0.11),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-    );
-  }
-}
-
-class _FilterDropdown extends StatelessWidget {
-  const _FilterDropdown({
-    required this.label,
-    required this.options,
-    required this.icon,
-    required this.onChanged,
-  });
-
-  final String label;
-  final List<String> options;
-  final IconData icon;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final selected = options.contains(label) ? label : options.first;
-    return SizedBox(
-      width: 156,
-      child: DropdownButtonFormField<String>(
-        initialValue: selected,
-        isExpanded: true,
-        decoration: InputDecoration(
-          prefixIcon: Icon(icon, size: 17),
-          isDense: true,
-        ),
-        items: options
-            .map(
-              (value) => DropdownMenuItem(
-                value: value,
-                child: Text(value, overflow: TextOverflow.ellipsis),
-              ),
-            )
-            .toList(),
-        onChanged: (value) {
-          if (value != null) onChanged(value);
-        },
-      ),
     );
   }
 }
