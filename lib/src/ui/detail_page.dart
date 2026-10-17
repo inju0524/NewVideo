@@ -831,20 +831,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   }
 
   Widget _buildFocusLayout() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final aspectRatio = _initialized && !_hasError
-            ? _controller!.value.aspectRatio
-            : 16 / 9;
-        return SizedBox.expand(
-          child: Center(
-            child: AspectRatio(
-              aspectRatio: aspectRatio,
-              child: _buildVideoSurface(),
-            ),
-          ),
-        );
-      },
+    return SizedBox.expand(
+      child: _buildVideoSurface(controlsUseFullViewport: true),
     );
   }
 
@@ -855,21 +843,23 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildVideoSurface() {
+  Widget _buildVideoSurface({bool controlsUseFullViewport = false}) {
     final showVideo = _initialized && _controller != null && !_hasError;
     return Stack(
       fit: StackFit.expand,
       children: [
         Hero(
           tag: _playItem.id,
-          child: MediaPoster(
-            url: _playItem.posterUrl,
-            thumbnailUrl: _playItem.thumbnailUrl,
-            title: '',
-            headers: _playItem.posterHeaders,
-            fallbackFontSize: 20,
-            reduceMotion: widget.store.reduceMotion,
-          ),
+          child: controlsUseFullViewport
+              ? const ColoredBox(color: Colors.black)
+              : MediaPoster(
+                  url: _playItem.posterUrl,
+                  thumbnailUrl: _playItem.thumbnailUrl,
+                  title: '',
+                  headers: _playItem.posterHeaders,
+                  fallbackFontSize: 20,
+                  reduceMotion: widget.store.reduceMotion,
+                ),
         ),
         if (showVideo)
           Positioned.fill(
@@ -883,23 +873,27 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
               curve: Curves.easeOutCubic,
               builder: (context, opacity, child) =>
                   Opacity(opacity: opacity, child: child),
-              child: _PlayerSurface(
-                key: _playerSurfaceKey,
-                controller: _controller!,
-                itemTitle: _playItem.title,
-                episodeTitle: _episode.title,
-                episodes: _playItem.episodes,
-                episodeIndex: _episodeIndex,
-                onBack: _handleBack,
-                onPrevious: _episodeIndex > 0
-                    ? () => _switchEpisode(_episodeIndex - 1)
-                    : null,
-                onNext: _episodeIndex + 1 < _playItem.episodes.length
-                    ? () => _switchEpisode(_episodeIndex + 1)
-                    : null,
-                onSelectEpisode: _switchEpisode,
-                onFullscreen: _toggleFullscreen,
-                isFullscreen: _isFullscreen,
+              child: SizedBox.expand(
+                key: const ValueKey('player-control-viewport'),
+                child: _PlayerSurface(
+                  key: _playerSurfaceKey,
+                  controller: _controller!,
+                  itemTitle: _playItem.title,
+                  episodeTitle: _episode.title,
+                  episodes: _playItem.episodes,
+                  episodeIndex: _episodeIndex,
+                  onBack: _handleBack,
+                  onPrevious: _episodeIndex > 0
+                      ? () => _switchEpisode(_episodeIndex - 1)
+                      : null,
+                  onNext: _episodeIndex + 1 < _playItem.episodes.length
+                      ? () => _switchEpisode(_episodeIndex + 1)
+                      : null,
+                  onSelectEpisode: _switchEpisode,
+                  onFullscreen: _toggleFullscreen,
+                  isFullscreen: _isFullscreen,
+                  controlsUseFullViewport: controlsUseFullViewport,
+                ),
               ),
             ),
           )
@@ -1307,6 +1301,7 @@ class _PlayerSurface extends StatefulWidget {
     required this.onSelectEpisode,
     required this.onFullscreen,
     required this.isFullscreen,
+    required this.controlsUseFullViewport,
   });
 
   final VideoPlayerController controller;
@@ -1320,6 +1315,7 @@ class _PlayerSurface extends StatefulWidget {
   final ValueChanged<int> onSelectEpisode;
   final VoidCallback onFullscreen;
   final bool isFullscreen;
+  final bool controlsUseFullViewport;
 
   @override
   State<_PlayerSurface> createState() => _PlayerSurfaceState();
@@ -1691,7 +1687,17 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
           return Stack(
             fit: StackFit.expand,
             children: [
-              VideoPlayer(controller),
+              if (widget.controlsUseFullViewport)
+                Center(
+                  child: AspectRatio(
+                    aspectRatio: controller.value.aspectRatio > 0
+                        ? controller.value.aspectRatio
+                        : 16 / 9,
+                    child: VideoPlayer(controller),
+                  ),
+                )
+              else
+                VideoPlayer(controller),
               Positioned.fill(
                 child: Listener(
                   behavior: HitTestBehavior.opaque,
@@ -1779,34 +1785,45 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
                             key: const ValueKey('player-locked-center-play'),
                           ),
                         ),
-                      Positioned(
-                        top: 0,
-                        bottom: 0,
-                        right: _seekLockButtonSize,
-                        child: Center(
-                          child: Material(
-                            color: _controlBackgroundColor,
-                            shape: const CircleBorder(),
-                            child: SizedBox.square(
-                              dimension: _seekLockButtonSize,
-                              child: IconButton(
-                                key: const ValueKey('player-seek-lock'),
-                                tooltip: _seekLocked ? '解锁滑动调节进度' : '锁定滑动调节进度',
-                                onPressed: _toggleSeekLock,
-                                color: _seekLocked
-                                    ? ZhuyingColors.amber
-                                    : Colors.white,
-                                constraints: const BoxConstraints.tightFor(
-                                  width: _seekLockButtonSize,
-                                  height: _seekLockButtonSize,
-                                ),
-                                padding: EdgeInsets.zero,
-                                alignment: Alignment.center,
-                                icon: Icon(
-                                  _seekLocked
-                                      ? Icons.lock_rounded
-                                      : Icons.lock_open_rounded,
-                                  size: 18,
+                      Positioned.fill(
+                        child: SafeArea(
+                          left: widget.controlsUseFullViewport,
+                          top: false,
+                          right: widget.controlsUseFullViewport,
+                          bottom: false,
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: Padding(
+                              padding: const EdgeInsets.only(
+                                right: _seekLockButtonSize,
+                              ),
+                              child: Material(
+                                color: _controlBackgroundColor,
+                                shape: const CircleBorder(),
+                                child: SizedBox.square(
+                                  dimension: _seekLockButtonSize,
+                                  child: IconButton(
+                                    key: const ValueKey('player-seek-lock'),
+                                    tooltip: _seekLocked
+                                        ? '解锁滑动调节进度'
+                                        : '锁定滑动调节进度',
+                                    onPressed: _toggleSeekLock,
+                                    color: _seekLocked
+                                        ? ZhuyingColors.amber
+                                        : Colors.white,
+                                    constraints: const BoxConstraints.tightFor(
+                                      width: _seekLockButtonSize,
+                                      height: _seekLockButtonSize,
+                                    ),
+                                    padding: EdgeInsets.zero,
+                                    alignment: Alignment.center,
+                                    icon: Icon(
+                                      _seekLocked
+                                          ? Icons.lock_rounded
+                                          : Icons.lock_open_rounded,
+                                      size: 18,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),

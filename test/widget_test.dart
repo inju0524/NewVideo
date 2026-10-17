@@ -848,13 +848,20 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
+    final originalPlatform = VideoPlayerPlatform.instance;
+    final fakePlatform = _SeekTestVideoPlatform();
+    VideoPlayerPlatform.instance = fakePlatform;
+    addTearDown(() => VideoPlayerPlatform.instance = originalPlatform);
+
     final store = AppStore();
     const item = MediaItem(
       id: 'rotation-player-item',
       title: 'Rotation player',
       sourceId: 'rotation-test',
       sourceName: '测试线路',
-      episodes: [MediaEpisode(title: '第01集', url: 'not-a-playback-url')],
+      episodes: [
+        MediaEpisode(title: '第01集', url: 'https://media.example/video.mp4'),
+      ],
     );
     await tester.pumpWidget(
       MaterialApp(
@@ -871,8 +878,17 @@ void main() {
 
     tester.view.physicalSize = const Size(844, 390);
     tester.binding.handleMetricsChanged();
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('player-focus-layout')), findsOneWidget);
+    final viewport = tester.getRect(
+      find.byKey(const ValueKey('player-control-viewport')),
+    );
+    final video = tester.getRect(find.byType(VideoPlayer));
+    final lock = tester.getRect(find.byKey(const ValueKey('player-seek-lock')));
+    expect(viewport, const Rect.fromLTWH(0, 0, 844, 390));
+    expect(video.width / video.height, closeTo(16 / 9, 0.01));
+    expect(lock.center.dy, closeTo(viewport.center.dy, 1));
+    expect(viewport.right - lock.right, closeTo(40, 1));
 
     tester.view.physicalSize = const Size(390, 844);
     tester.binding.handleMetricsChanged();
