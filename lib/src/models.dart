@@ -124,10 +124,31 @@ const defaultSources = [
     statusMessage: '预置源',
   ),
   MediaSource(
+    id: 'public-ffzy-cj',
+    name: '非凡采集',
+    endpoint: 'https://cj.ffzyapi.com/api.php/provide/vod/',
+    enabled: false,
+    statusMessage: '内置源，手动启用',
+  ),
+  MediaSource(
+    id: 'public-ffzy-backup',
+    name: '非凡备用',
+    endpoint: 'https://ffzy1.tv/api.php/provide/vod',
+    enabled: false,
+    statusMessage: '内置源，手动启用',
+  ),
+  MediaSource(
     id: 'preset-lzi',
     name: '量子影视',
     endpoint: 'https://cj.lziapi.com/api.php/provide/vod/',
     statusMessage: '预置源',
+  ),
+  MediaSource(
+    id: 'public-ruyi',
+    name: '如意资源',
+    endpoint: 'https://cj.rycjapi.com/api.php/provide/vod',
+    enabled: false,
+    statusMessage: '内置源，手动启用',
   ),
   MediaSource(
     id: 'public-360zy',

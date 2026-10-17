@@ -7,7 +7,7 @@ void main() {
         .where((source) => source.id.startsWith('public-'))
         .toList();
 
-    expect(publicSources, hasLength(29));
+    expect(publicSources, hasLength(32));
     expect(publicSources.every((source) => !source.enabled), isTrue);
     expect(
       publicSources.every(
@@ -33,6 +33,9 @@ void main() {
         '无尽资源',
         '樱花资源',
         '爱坤资源',
+        '非凡备用',
+        '非凡采集',
+        '如意资源',
       ]),
     );
     expect(
