@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,10 @@ import 'package:flutter/services.dart';
 
 import 'app_store.dart';
 import 'models.dart';
+import 'platform/branding_web_stub.dart'
+    if (dart.library.js_interop) 'platform/branding_web.dart'
+    as platform_branding;
+import 'theme/app_theme.dart';
 import 'ui/catalog_pages.dart';
 import 'ui/detail_page.dart';
 import 'ui/widgets.dart';
@@ -20,7 +25,10 @@ class ZhuyingApp extends StatefulWidget {
 }
 
 class _ZhuyingAppState extends State<ZhuyingApp> with WidgetsBindingObserver {
+  static const _appIconChannel = MethodChannel('zhuying/app-icon');
   late final AppStore _store;
+  late String _themeId;
+  bool _platformBrandingReady = false;
   Timer? _resumeRetryTimer;
 
   @override
@@ -28,7 +36,62 @@ class _ZhuyingAppState extends State<ZhuyingApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _store = widget.store ?? AppStore();
-    _store.initialize();
+    _themeId = _store.themeId;
+    _store.addListener(_handleStoreChanged);
+    unawaited(_initializeStore());
+  }
+
+  Future<void> _initializeStore() async {
+    await _store.initialize();
+    if (mounted) {
+      _platformBrandingReady = true;
+      if (_themeId != _store.themeId) {
+        setState(() => _themeId = _store.themeId);
+      }
+      await _syncPlatformBranding(ZhuyingThemes.byId(_store.themeId));
+    }
+  }
+
+  void _handleStoreChanged() {
+    if (!mounted || _themeId == _store.themeId) return;
+    final nextThemeId = _store.themeId;
+    setState(() => _themeId = nextThemeId);
+    if (_platformBrandingReady) {
+      unawaited(_syncPlatformBranding(ZhuyingThemes.byId(nextThemeId)));
+    }
+  }
+
+  Future<void> _syncPlatformBranding(ZhuyingThemeDefinition definition) async {
+    if (kIsWeb) {
+      platform_branding.updateWebBranding(
+        title: definition.brandName,
+        faviconPath: definition.isMitsuri
+            ? 'icons/Icon-Mitsuri-192.png'
+            : 'favicon.png',
+        appleTouchIconPath: definition.isMitsuri
+            ? 'icons/Icon-Mitsuri-192.png'
+            : 'icons/Icon-192.png',
+        manifestPath: definition.isMitsuri
+            ? 'manifest-mitsuri.json'
+            : 'manifest.json',
+      );
+      return;
+    }
+    if (defaultTargetPlatform != TargetPlatform.android &&
+        defaultTargetPlatform != TargetPlatform.iOS &&
+        defaultTargetPlatform != TargetPlatform.windows) {
+      return;
+    }
+    try {
+      await _appIconChannel.invokeMethod<void>('setLauncherIcon', {
+        'isMitsuri': definition.isMitsuri,
+        'brandName': definition.brandName,
+      });
+    } on MissingPluginException {
+      // Keep the in-app branding available when native icon switching is absent.
+    } on PlatformException {
+      // A platform launcher may reject an icon update; the app theme still applies.
+    }
   }
 
   @override
@@ -44,82 +107,28 @@ class _ZhuyingAppState extends State<ZhuyingApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _resumeRetryTimer?.cancel();
+    _store.removeListener(_handleStoreChanged);
     _store.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final definition = ZhuyingThemes.byId(_themeId);
+    ZhuyingColors.setActive(definition);
     return MaterialApp(
-      title: '烛影',
+      title: definition.brandName,
       debugShowCheckedModeBanner: false,
-      theme: _buildTheme(),
+      theme: _buildTheme(definition),
+      themeAnimationDuration: const Duration(milliseconds: 420),
+      themeAnimationCurve: Curves.easeInOutCubic,
       home: AppShell(store: _store),
     );
   }
 
-  ThemeData _buildTheme() {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: ZhuyingColors.amber,
-      brightness: Brightness.dark,
-      surface: ZhuyingColors.surface,
-    );
-    return ThemeData(
-      useMaterial3: true,
-      colorScheme: scheme.copyWith(
-        primary: ZhuyingColors.amber,
-        secondary: ZhuyingColors.green,
-        surface: ZhuyingColors.surface,
-        onSurface: ZhuyingColors.text,
-      ),
-      scaffoldBackgroundColor: ZhuyingColors.canvas,
-      textTheme: ThemeData.dark().textTheme.apply(
-        bodyColor: ZhuyingColors.text,
-        displayColor: ZhuyingColors.text,
-      ),
-      dividerColor: ZhuyingColors.line,
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: ZhuyingColors.surface,
-        hintStyle: const TextStyle(color: ZhuyingColors.muted),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(7),
-          borderSide: const BorderSide(color: ZhuyingColors.line),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(7),
-          borderSide: const BorderSide(color: ZhuyingColors.line),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(7),
-          borderSide: const BorderSide(color: ZhuyingColors.amber, width: 1.2),
-        ),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 12,
-        ),
-      ),
-      snackBarTheme: SnackBarThemeData(
-        backgroundColor: ZhuyingColors.surfaceRaised,
-        contentTextStyle: const TextStyle(color: ZhuyingColors.text),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
-      ),
-      navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: ZhuyingColors.surface,
-        indicatorColor: ZhuyingColors.amber.withValues(alpha: 0.14),
-        labelTextStyle: WidgetStateProperty.resolveWith(
-          (states) => TextStyle(
-            color: states.contains(WidgetState.selected)
-                ? ZhuyingColors.amber
-                : ZhuyingColors.muted,
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
-    );
-  }
+  ThemeData _buildTheme(ZhuyingThemeDefinition definition) => definition
+      .toThemeData()
+      .copyWith(extensions: [ZhuyingThemeExtension(definition)]);
 }
 
 class AppShell extends StatefulWidget {
@@ -265,58 +274,72 @@ class _AppShellState extends State<AppShell>
         builder: (context, constraints) {
           final desktop = constraints.maxWidth >= 900;
           return Scaffold(
-            body: SafeArea(
-              bottom: !desktop,
-              child: Row(
-                children: [
-                  if (desktop)
-                    _DesktopNavigation(
-                      selectedIndex: _selectedIndex,
-                      destinations: _destinations,
-                      onSelect: _select,
-                      sourceCount: widget.store.sources.length,
-                    ),
-                  Expanded(
-                    child: Column(
-                      children: [
-                        _TopBar(
-                          selectedIndex: _selectedIndex,
-                          destinations: _destinations,
-                          onOpenSearch: () => _openSearch(''),
-                          onOpenSearchField: () => _openSearch('', true),
-                          store: widget.store,
-                        ),
-                        Expanded(
-                          child: AnimatedBuilder(
-                            animation: _tabTransition,
-                            builder: (context, _) {
-                              final eased = Curves.easeInOutCubic.transform(
-                                _tabTransition.value,
-                              );
-                              return Stack(
-                                fit: StackFit.expand,
-                                children: [
-                                  for (var index = 0; index < 4; index++)
-                                    if (_visitedTabs[index])
-                                      _tabPage(index, eased),
-                                ],
-                              );
-                            },
+            body: ZhuyingThemeBackdrop(
+              reduceMotion: widget.store.reduceMotion,
+              showCharacter:
+                  !(_selectedIndex == 0 && context.zhuyingTheme.isMitsuri),
+              child: SafeArea(
+                bottom: !desktop,
+                child: Row(
+                  children: [
+                    if (desktop)
+                      _DesktopNavigation(
+                        selectedIndex: _selectedIndex,
+                        destinations: _destinations,
+                        onSelect: _select,
+                        sourceCount: widget.store.sources.length,
+                      ),
+                    Expanded(
+                      child: Column(
+                        children: [
+                          if (!(_selectedIndex == 0 &&
+                              context.zhuyingTheme.isMitsuri))
+                            _TopBar(
+                              selectedIndex: _selectedIndex,
+                              destinations: _destinations,
+                              onOpenSearch: () => _openSearch(''),
+                              onOpenSearchField: () => _openSearch('', true),
+                              store: widget.store,
+                            ),
+                          Expanded(
+                            child: AnimatedBuilder(
+                              animation: _tabTransition,
+                              builder: (context, _) {
+                                final eased = Curves.easeInOutCubic.transform(
+                                  _tabTransition.value,
+                                );
+                                return Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    for (var index = 0; index < 4; index++)
+                                      if (_visitedTabs[index])
+                                        _tabPage(index, eased),
+                                  ],
+                                );
+                              },
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             bottomNavigationBar: desktop
                 ? null
+                : context.zhuyingTheme.isMitsuri
+                ? _MitsuriNavigationBar(
+                    selectedIndex: _selectedIndex,
+                    destinations: _destinations,
+                    onSelected: _select,
+                  )
                 : _isNativeIosDock
                 ? _NativeIosDock(
                     selectedIndex: _selectedIndex,
                     onSelected: _select,
                     channel: _nativeDockChannel,
+                    theme: context.zhuyingTheme,
                   )
                 : NavigationBar(
                     selectedIndex: _selectedIndex,
@@ -356,6 +379,14 @@ class _AppShellState extends State<AppShell>
       2 => SourcesPage(store: widget.store),
       _ => MinePage(store: widget.store, onOpenItem: _openItem),
     };
+    // Keep the immersive Mitsuri home transparent so its scene can continue
+    // behind the content; other pages retain an opaque surface during fades.
+    // The Mitsuri edition keeps the atmospheric layer visible across the
+    // primary tabs so the theme reads as one visual world, while the default
+    // edition retains the original opaque page surfaces.
+    final pageSurface = context.zhuyingTheme.isMitsuri
+        ? page
+        : ColoredBox(color: ZhuyingColors.canvas, child: page);
     return Offstage(
       offstage: !visible,
       child: TickerMode(
@@ -366,7 +397,7 @@ class _AppShellState extends State<AppShell>
             opacity: opacity,
             child: HeroMode(
               enabled: selected,
-              child: _RetainedPage(key: ValueKey(index), child: page),
+              child: _RetainedPage(key: ValueKey(index), child: pageSurface),
             ),
           ),
         ),
@@ -384,16 +415,175 @@ class _AppShellState extends State<AppShell>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 }
 
+class _MitsuriNavigationBar extends StatelessWidget {
+  const _MitsuriNavigationBar({
+    required this.selectedIndex,
+    required this.destinations,
+    required this.onSelected,
+  });
+
+  final int selectedIndex;
+  final List<_Destination> destinations;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(10, 0, 10, bottomInset + 8),
+      child: SizedBox(
+        height: 72,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(30),
+                  boxShadow: [
+                    BoxShadow(
+                      color: ZhuyingColors.primary.withValues(alpha: 0.12),
+                      blurRadius: 24,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: RoundedBorderFrame(
+                  borderRadius: BorderRadius.circular(30),
+                  borderColor: ZhuyingColors.accent.withValues(alpha: 0.5),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                    child: DecoratedBox(
+                      decoration: const BoxDecoration(color: Color(0xCC160F18)),
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 44),
+                        child: Row(
+                          children: [
+                            for (
+                              var index = 0;
+                              index < destinations.length;
+                              index++
+                            )
+                              Expanded(
+                                child: _MitsuriDockItem(
+                                  destination: destinations[index],
+                                  selected: selectedIndex == index,
+                                  onTap: () => onSelected(index),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: -8,
+              bottom: -10,
+              width: 96,
+              height: 102,
+              child: _MitsuriDockCharacter(
+                asset: context.zhuyingTheme.chibiAsset,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MitsuriDockCharacter extends StatelessWidget {
+  const _MitsuriDockCharacter({required this.asset});
+
+  final String? asset;
+
+  @override
+  Widget build(BuildContext context) {
+    if (asset == null) return const SizedBox.shrink();
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Image.asset(
+        asset!,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
+      ),
+    );
+  }
+}
+
+class _MitsuriDockItem extends StatelessWidget {
+  const _MitsuriDockItem({
+    required this.destination,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _Destination destination;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: destination.label,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(22),
+        child: AnimatedContainer(
+          duration: motionDuration(
+            context,
+            false,
+            const Duration(milliseconds: 220),
+          ),
+          margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+          decoration: BoxDecoration(
+            color: selected
+                ? ZhuyingColors.primary.withValues(alpha: 0.22)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(22),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                selected ? destination.selectedIcon : destination.icon,
+                size: 21,
+                color: selected ? ZhuyingColors.primary : ZhuyingColors.text,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                destination.label,
+                style: TextStyle(
+                  color: selected ? ZhuyingColors.primary : ZhuyingColors.muted,
+                  fontSize: 10,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _NativeIosDock extends StatefulWidget {
   const _NativeIosDock({
     required this.selectedIndex,
     required this.onSelected,
     required this.channel,
+    required this.theme,
   });
 
   final int selectedIndex;
   final ValueChanged<int> onSelected;
   final MethodChannel channel;
+  final ZhuyingThemeDefinition theme;
 
   @override
   State<_NativeIosDock> createState() => _NativeIosDockState();
@@ -404,6 +594,7 @@ class _NativeIosDockState extends State<_NativeIosDock> {
   void initState() {
     super.initState();
     widget.channel.setMethodCallHandler(_handleNativeSelection);
+    unawaited(_applyNativeTheme());
   }
 
   @override
@@ -416,6 +607,9 @@ class _NativeIosDockState extends State<_NativeIosDock> {
     if (oldWidget.selectedIndex != widget.selectedIndex) {
       _selectNativeTab();
     }
+    if (oldWidget.theme.id != widget.theme.id) {
+      unawaited(_applyNativeTheme());
+    }
   }
 
   Future<void> _handleNativeSelection(MethodCall call) async {
@@ -427,6 +621,19 @@ class _NativeIosDockState extends State<_NativeIosDock> {
   Future<void> _selectNativeTab() async {
     try {
       await widget.channel.invokeMethod<void>('select', widget.selectedIndex);
+    } on MissingPluginException {
+      // The platform view may not have been created yet.
+    } on PlatformException {
+      // Keep Flutter navigation responsive if the native bar is unavailable.
+    }
+  }
+
+  Future<void> _applyNativeTheme() async {
+    try {
+      await widget.channel.invokeMethod<void>('theme', {
+        'primary': widget.theme.primary.toARGB32(),
+        'surface': widget.theme.surface.toARGB32(),
+      });
     } on MissingPluginException {
       // The platform view may not have been created yet.
     } on PlatformException {
@@ -450,9 +657,14 @@ class _NativeIosDockState extends State<_NativeIosDock> {
         creationParams: {
           'selectedIndex': widget.selectedIndex,
           'bottomInset': bottomInset,
+          'primary': widget.theme.primary.toARGB32(),
+          'surface': widget.theme.surface.toARGB32(),
         },
         creationParamsCodec: const StandardMessageCodec(),
-        onPlatformViewCreated: (_) => _selectNativeTab(),
+        onPlatformViewCreated: (_) async {
+          await _applyNativeTheme();
+          await _selectNativeTab();
+        },
       ),
     );
   }
@@ -504,16 +716,16 @@ class _DesktopNavigation extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 224,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: ZhuyingColors.surface,
         border: Border(right: BorderSide(color: ZhuyingColors.line)),
       ),
-      padding: const EdgeInsets.fromLTRB(18, 22, 14, 18),
+      padding: EdgeInsets.fromLTRB(18, 22, 14, 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const _BrandMark(),
-          const SizedBox(height: 36),
+          SizedBox(height: 36),
           for (var index = 0; index < destinations.length; index++)
             _RailItem(
               destination: destinations[index],
@@ -522,26 +734,19 @@ class _DesktopNavigation extends StatelessWidget {
             ),
           const Spacer(),
           Container(height: 1, color: ZhuyingColors.line),
-          const SizedBox(height: 14),
+          SizedBox(height: 14),
           Row(
             children: [
-              const Icon(
-                Icons.lan_outlined,
-                size: 16,
-                color: ZhuyingColors.green,
-              ),
-              const SizedBox(width: 8),
+              Icon(Icons.lan_outlined, size: 16, color: ZhuyingColors.green),
+              SizedBox(width: 8),
               Text(
                 '$sourceCount 个片源',
-                style: const TextStyle(
-                  color: ZhuyingColors.muted,
-                  fontSize: 12,
-                ),
+                style: TextStyle(color: ZhuyingColors.muted, fontSize: 12),
               ),
             ],
           ),
-          const SizedBox(height: 7),
-          const Text(
+          SizedBox(height: 7),
+          Text(
             '本地片库',
             style: TextStyle(color: ZhuyingColors.muted, fontSize: 11),
           ),
@@ -556,30 +761,49 @@ class _BrandMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = context.zhuyingTheme;
+    final radius = BorderRadius.circular(theme.isMitsuri ? 12 : 7);
+    final mark = SizedBox(
+      width: 36,
+      height: 36,
+      child: ClipRRect(
+        borderRadius: radius,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: theme.isMitsuri ? theme.surface : Colors.black,
+          ),
+          child: Image.asset(
+            key: ValueKey('brand-logo-${theme.id}'),
+            theme.logoAsset,
+            semanticLabel: theme.brandName,
+            fit: BoxFit.contain,
+            filterQuality: FilterQuality.high,
+          ),
+        ),
+      ),
+    );
     return Row(
       children: [
-        Container(
-          width: 34,
-          height: 34,
-          decoration: BoxDecoration(
-            color: ZhuyingColors.amber.withValues(alpha: 0.14),
-            borderRadius: BorderRadius.circular(7),
+        mark,
+        SizedBox(width: 10),
+        if (theme.isMitsuri)
+          _MitsuriGradientText(
+            theme.brandName,
+            style: TextStyle(
+              fontSize: 19,
+              fontWeight: FontWeight.w700,
+              fontFamily: theme.displayFontFamily,
+            ),
+          )
+        else
+          Text(
+            theme.brandName,
+            style: TextStyle(
+              color: ZhuyingColors.text,
+              fontSize: 19,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-          child: const Icon(
-            Icons.local_movies_outlined,
-            color: ZhuyingColors.amber,
-            size: 19,
-          ),
-        ),
-        const SizedBox(width: 10),
-        const Text(
-          '烛影',
-          style: TextStyle(
-            color: ZhuyingColors.text,
-            fontSize: 19,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
       ],
     );
   }
@@ -599,7 +823,7 @@ class _RailItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 5),
+      padding: EdgeInsets.only(bottom: 5),
       child: Material(
         color: selected
             ? ZhuyingColors.amber.withValues(alpha: 0.12)
@@ -612,13 +836,13 @@ class _RailItem extends StatelessWidget {
             height: 44,
             child: Row(
               children: [
-                const SizedBox(width: 12),
+                SizedBox(width: 12),
                 Icon(
                   selected ? destination.selectedIcon : destination.icon,
                   size: 19,
                   color: selected ? ZhuyingColors.amber : ZhuyingColors.muted,
                 ),
-                const SizedBox(width: 12),
+                SizedBox(width: 12),
                 Text(
                   destination.label,
                   style: TextStyle(
@@ -660,20 +884,20 @@ class _TopBarState extends State<_TopBar> {
   Widget build(BuildContext context) {
     return Container(
       height: 70,
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      decoration: const BoxDecoration(
+      padding: EdgeInsets.symmetric(horizontal: 24),
+      decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: ZhuyingColors.line)),
       ),
       child: Row(
         children: [
           if (MediaQuery.sizeOf(context).width < 900) ...[
             const _BrandMark(),
-            const SizedBox(width: 16),
+            SizedBox(width: 16),
           ] else
             Expanded(
               child: Text(
                 widget.destinations[widget.selectedIndex.clamp(0, 3)].label,
-                style: const TextStyle(
+                style: TextStyle(
                   color: ZhuyingColors.text,
                   fontWeight: FontWeight.w600,
                   fontSize: 15,
@@ -691,7 +915,7 @@ class _TopBarState extends State<_TopBar> {
             ),
           const Spacer(),
           if (widget.store.isRefreshing)
-            const SizedBox(
+            SizedBox(
               width: 16,
               height: 16,
               child: CircularProgressIndicator(
@@ -703,14 +927,14 @@ class _TopBarState extends State<_TopBar> {
             IconButton(
               tooltip: '刷新片源',
               onPressed: widget.store.refreshSources,
-              icon: const Icon(Icons.refresh_rounded, size: 20),
+              icon: Icon(Icons.refresh_rounded, size: 20),
             ),
           if (MediaQuery.sizeOf(context).width < 650 &&
               widget.selectedIndex != 0)
             IconButton(
               tooltip: '搜索',
               onPressed: widget.onOpenSearch,
-              icon: const Icon(Icons.search_rounded, size: 19),
+              icon: Icon(Icons.search_rounded, size: 19),
             ),
         ],
       ),
@@ -752,6 +976,21 @@ class HomePage extends StatelessWidget {
         ? freshItems.skip(1).take(12).toList()
         : <MediaItem>[];
     final loadingHome = !store.hasInitialized || store.isRefreshing;
+    if (context.zhuyingTheme.isMitsuri) {
+      return _MitsuriHomeLayout(
+        store: store,
+        onOpenItem: onOpenItem,
+        onHistory: onHistory,
+        onSearch: onSearch,
+        items: items,
+        continueItems: continueItems,
+        recommendationItems: recommendationItems,
+        freshItems: freshItems,
+        hero: hero,
+        recommendations: recommendations,
+        loadingHome: loadingHome,
+      );
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         final horizontal = constraints.maxWidth < 700 ? 18.0 : 36.0;
@@ -762,7 +1001,7 @@ class HomePage extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       '今晚看点什么',
                       style: TextStyle(
@@ -776,7 +1015,7 @@ class HomePage extends StatelessWidget {
                       constraints.maxWidth > 600)
                     Text(
                       store.refreshMessage!,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: ZhuyingColors.muted,
                         fontSize: 11,
                       ),
@@ -784,7 +1023,7 @@ class HomePage extends StatelessWidget {
                 ],
               ),
               if (constraints.maxWidth < 650) ...[
-                const SizedBox(height: 18),
+                SizedBox(height: 18),
                 SearchField(
                   heroEnabled: MediaQuery.sizeOf(context).width < 650,
                   readOnly: true,
@@ -792,7 +1031,7 @@ class HomePage extends StatelessWidget {
                   hintText: '搜索片名或关键词',
                 ),
               ],
-              const SizedBox(height: 22),
+              SizedBox(height: 22),
               AnimatedSwitcher(
                 duration: motionDuration(
                   context,
@@ -816,12 +1055,9 @@ class HomePage extends StatelessWidget {
                         key: const ValueKey('home-hero-placeholder'),
                         height: constraints.maxWidth < 650 ? 270 : 340,
                       )
-                    : const SizedBox(
-                        key: ValueKey('home-hero-empty'),
-                        height: 0,
-                      ),
+                    : SizedBox(key: ValueKey('home-hero-empty'), height: 0),
               ),
-              const SizedBox(height: 30),
+              SizedBox(height: 30),
               if (continueItems.isNotEmpty) ...[
                 SectionTitle(
                   title: '接着看',
@@ -830,13 +1066,13 @@ class HomePage extends StatelessWidget {
                     child: const Text('观看历史'),
                   ),
                 ),
-                const SizedBox(height: 14),
+                SizedBox(height: 14),
                 SizedBox(
                   height: 118,
                   child: ListView.separated(
                     scrollDirection: Axis.horizontal,
                     itemCount: continueItems.take(6).length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 12),
+                    separatorBuilder: (_, _) => SizedBox(width: 12),
                     itemBuilder: (context, index) {
                       final item = continueItems[index];
                       return _ContinueTile(
@@ -847,19 +1083,16 @@ class HomePage extends StatelessWidget {
                     },
                   ),
                 ),
-                const SizedBox(height: 30),
+                SizedBox(height: 30),
               ],
               SectionTitle(
                 title: '为你挑选',
                 trailing: Text(
                   '${freshItems.length} 部',
-                  style: const TextStyle(
-                    color: ZhuyingColors.muted,
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: ZhuyingColors.muted, fontSize: 12),
                 ),
               ),
-              const SizedBox(height: 15),
+              SizedBox(height: 15),
               if (recommendations.isEmpty && loadingHome)
                 const _HomeLoadingGrid()
               else if (recommendations.isEmpty)
@@ -894,6 +1127,1164 @@ class HomePage extends StatelessWidget {
       },
     );
   }
+}
+
+class _MitsuriHomeLayout extends StatelessWidget {
+  const _MitsuriHomeLayout({
+    required this.store,
+    required this.onOpenItem,
+    required this.onHistory,
+    required this.onSearch,
+    required this.items,
+    required this.continueItems,
+    required this.recommendationItems,
+    required this.freshItems,
+    required this.hero,
+    required this.recommendations,
+    required this.loadingHome,
+  });
+
+  final AppStore store;
+  final ValueChanged<MediaItem> onOpenItem;
+  final VoidCallback onHistory;
+  final ValueChanged<String> onSearch;
+  final List<MediaItem> items;
+  final List<MediaItem> continueItems;
+  final List<MediaItem> recommendationItems;
+  final List<MediaItem> freshItems;
+  final MediaItem? hero;
+  final List<MediaItem> recommendations;
+  final bool loadingHome;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 650;
+        final side = narrow ? 18.0 : 34.0;
+        // The Mitsuri dock floats above the page on compact screens. Keep a
+        // generous scroll tail so the promo scene and the last poster row can
+        // always be brought fully above the dock and its safe area.
+        final bottomPadding = narrow
+            ? 118.0 + MediaQuery.paddingOf(context).bottom
+            : 34.0;
+        final railItems = recommendations.isNotEmpty
+            ? recommendations.take(12).toList()
+            : freshItems.skip(1).take(12).toList();
+        return SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(side, 0, side, bottomPadding),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _MitsuriIntroStage(
+                height: narrow ? 302 : 338,
+                heroEnabled: narrow,
+                onSearch: () => onSearch(''),
+                onRefresh: store.refreshSources,
+                refreshing: store.isRefreshing,
+                refreshMessage: store.refreshMessage,
+              ),
+              SizedBox(height: narrow ? 1 : 7),
+              AnimatedSwitcher(
+                duration: motionDuration(
+                  context,
+                  store.reduceMotion,
+                  const Duration(milliseconds: 260),
+                ),
+                child: hero != null
+                    ? _MitsuriHeroFeature(
+                        key: ValueKey('mitsuri-hero-${hero!.id}'),
+                        item: hero!,
+                        onTap: () => onOpenItem(hero!),
+                        reduceMotion: store.reduceMotion,
+                        // A wide poster stage leaves room for the real content
+                        // and keeps the floating dock out of the first frame.
+                        height: narrow ? 304 : 420,
+                      )
+                    : loadingHome
+                    ? _HomeHeroPlaceholder(
+                        key: const ValueKey('mitsuri-hero-placeholder'),
+                        height: narrow ? 304 : 420,
+                      )
+                    : const SizedBox.shrink(
+                        key: ValueKey('mitsuri-hero-empty'),
+                      ),
+              ),
+              if (continueItems.isNotEmpty) ...[
+                SizedBox(height: 28),
+                _MitsuriTitleRow(
+                  title: '接着看',
+                  trailing: TextButton(
+                    onPressed: onHistory,
+                    child: const Text('观看历史'),
+                  ),
+                ),
+                SizedBox(height: 12),
+                SizedBox(
+                  height: 118,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsetsDirectional.only(start: 4, end: 8),
+                    itemCount: continueItems.take(6).length,
+                    separatorBuilder: (_, _) => SizedBox(width: 12),
+                    itemBuilder: (context, index) => _ContinueTile(
+                      item: continueItems[index],
+                      onTap: () => onOpenItem(continueItems[index]),
+                      reduceMotion: store.reduceMotion,
+                    ),
+                  ),
+                ),
+              ],
+              SizedBox(height: 30),
+              _MitsuriTitleRow(
+                title: '为你挑选',
+                trailing: Text('${freshItems.length} 部'),
+              ),
+              SizedBox(height: 14),
+              if (railItems.isEmpty && loadingHome)
+                const _HomeLoadingGrid()
+              else if (railItems.isEmpty)
+                EmptyState(
+                  icon: Icons.movie_filter_outlined,
+                  title: hero != null
+                      ? '暂时没有更多影片'
+                      : recommendationItems.isEmpty && items.isNotEmpty
+                      ? '暂无电影或电视剧推荐'
+                      : store.history.isEmpty
+                      ? '片源暂时没有返回影片'
+                      : '暂时没有新片推荐',
+                  detail: '刷新片源，或在片源管理中添加其他来源。',
+                )
+              else
+                _MitsuriPosterRail(
+                  items: railItems,
+                  favorites: store.favorites,
+                  onOpenItem: onOpenItem,
+                  onFavorite: store.toggleFavorite,
+                  reduceMotion: store.reduceMotion,
+                ),
+              SizedBox(height: 28),
+              _MitsuriPromoCard(),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MitsuriIntroStage extends StatelessWidget {
+  const _MitsuriIntroStage({
+    required this.height,
+    required this.heroEnabled,
+    required this.onSearch,
+    required this.onRefresh,
+    required this.refreshing,
+    required this.refreshMessage,
+  });
+
+  final double height;
+  final bool heroEnabled;
+  final VoidCallback onSearch;
+  final VoidCallback onRefresh;
+  final bool refreshing;
+  final String? refreshMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.zhuyingTheme;
+    final narrow = MediaQuery.sizeOf(context).width < 650;
+    const portraitScale = 0.6;
+    final portraitWidth = (narrow ? 252.0 : 274.0) * portraitScale;
+    final portraitHeight = portraitWidth / 0.665;
+    return SizedBox(
+      key: const ValueKey('mitsuri-intro-stage'),
+      height: height,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    theme.canvas,
+                    theme.canvas.withValues(alpha: 0.72),
+                    theme.surface.withValues(alpha: 0.64),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (theme.atmosphereAsset != null)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: ShaderMask(
+                  blendMode: BlendMode.dstIn,
+                  shaderCallback: (bounds) => LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.white.withValues(alpha: 0.82),
+                      Colors.white.withValues(alpha: 0.72),
+                      Colors.white.withValues(alpha: 0.3),
+                      Colors.transparent,
+                    ],
+                    stops: const [0, 0.58, 0.84, 1],
+                  ).createShader(bounds),
+                  child: Opacity(
+                    opacity: 0.58,
+                    child: Image.asset(
+                      theme.atmosphereAsset!,
+                      fit: BoxFit.cover,
+                      alignment: Alignment.topCenter,
+                      filterQuality: FilterQuality.medium,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [
+                    theme.canvas.withValues(alpha: 0.9),
+                    theme.canvas.withValues(alpha: 0.58),
+                    theme.canvas.withValues(alpha: 0.04),
+                  ],
+                  stops: const [0, 0.48, 1],
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 10,
+            bottom: 25,
+            width: portraitWidth,
+            height: portraitHeight,
+            child: IgnorePointer(
+              child: ShaderMask(
+                blendMode: BlendMode.dstIn,
+                shaderCallback: (bounds) => LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.white,
+                    Colors.white,
+                    Colors.white.withValues(alpha: 0.95),
+                    Colors.white.withValues(alpha: 0.5),
+                    Colors.transparent,
+                  ],
+                  stops: const [0, 0.66, 0.78, 0.9, 1],
+                ).createShader(bounds),
+                child: Image.asset(
+                  key: const ValueKey('mitsuri-main-portrait'),
+                  theme.characterBustAsset ?? theme.characterAsset!,
+                  fit: BoxFit.contain,
+                  alignment: Alignment.topCenter,
+                  filterQuality: FilterQuality.high,
+                  errorBuilder: (context, error, stackTrace) =>
+                      const SizedBox(),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            top: 22,
+            right: narrow ? 110 : 140,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 45,
+                  height: 45,
+                  child: RoundedBorderFrame(
+                    borderRadius: BorderRadius.circular(15),
+                    borderColor: Colors.white.withValues(alpha: 0.32),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: theme.surface.withValues(alpha: 0.58),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(4),
+                          child: Image.asset(
+                            key: ValueKey('brand-logo-${theme.id}-hero'),
+                            theme.logoAsset,
+                            semanticLabel: theme.brandName,
+                            fit: BoxFit.contain,
+                            filterQuality: FilterQuality.high,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _MitsuriGradientText(
+                      theme.brandName,
+                      style: TextStyle(
+                        fontFamily: theme.displayFontFamily,
+                        fontSize: 25,
+                        height: 1.05,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text(
+                      'MITSURI EDITION · 01',
+                      style: TextStyle(
+                        color: theme.accent,
+                        fontSize: 8,
+                        letterSpacing: 1.1,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '「小谷专属定制·YSK赠」',
+                      style: TextStyle(
+                        color: theme.muted.withValues(alpha: 0.9),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Mitsuri',
+                      style: TextStyle(
+                        color: const Color(0xFFFFC3D8),
+                        fontFamily: theme.signatureFontFamily,
+                        fontSize: 22,
+                        height: 0.95,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Positioned(
+            right: 2,
+            top: 20,
+            child: IconButton.filledTonal(
+              tooltip: '刷新片源',
+              onPressed: refreshing ? null : onRefresh,
+              icon: Icon(
+                refreshing
+                    ? Icons.hourglass_top_rounded
+                    : Icons.refresh_rounded,
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 25,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: _MitsuriGradientText(
+                              '今晚看点什么',
+                              maxLines: 1,
+                              style: TextStyle(
+                                fontFamily: theme.displayFontFamily,
+                                fontSize: narrow ? 28 : 32,
+                                height: 1.08,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Icon(
+                            key: const ValueKey('mitsuri-heading-flower'),
+                            Icons.local_florist_rounded,
+                            size: 17,
+                            color: theme.primary,
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (refreshMessage != null && !narrow) ...[
+                      const SizedBox(width: 10),
+                      Flexible(
+                        child: Text(
+                          refreshMessage!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: theme.muted, fontSize: 10),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _MitsuriSearchField(heroEnabled: heroEnabled, onTap: onSearch),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MitsuriGradientText extends StatelessWidget {
+  const _MitsuriGradientText(this.text, {required this.style, this.maxLines});
+
+  final String text;
+  final TextStyle style;
+  final int? maxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.zhuyingTheme;
+    return ShaderMask(
+      blendMode: BlendMode.srcIn,
+      shaderCallback: (bounds) => LinearGradient(
+        colors: [
+          const Color(0xFFFFF7FA),
+          theme.accent,
+          const Color(0xFFD8ED9B),
+        ],
+        stops: const [0, 0.62, 1],
+      ).createShader(bounds),
+      child: Text(
+        text,
+        maxLines: maxLines,
+        overflow: maxLines == null ? TextOverflow.clip : TextOverflow.ellipsis,
+        style: style.copyWith(color: Colors.white),
+      ),
+    );
+  }
+}
+
+class _MitsuriTitleRow extends StatelessWidget {
+  const _MitsuriTitleRow({required this.title, this.trailing});
+
+  final String title;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(
+          child: Row(
+            children: [
+              Flexible(
+                child: _MitsuriGradientText(
+                  title,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontFamily: context.zhuyingTheme.displayFontFamily,
+                    fontSize: 25,
+                    height: 1,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              SizedBox(width: 8),
+              Icon(
+                Icons.local_florist_rounded,
+                size: 16,
+                color: ZhuyingColors.primary,
+              ),
+            ],
+          ),
+        ),
+        ?trailing,
+      ],
+    );
+  }
+}
+
+class _MitsuriSearchField extends StatelessWidget {
+  const _MitsuriSearchField({required this.heroEnabled, required this.onTap});
+
+  final bool heroEnabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.zhuyingTheme;
+    final radius = BorderRadius.circular(30);
+    final field = Container(
+      key: const ValueKey('mitsuri-search-field'),
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        boxShadow: [
+          BoxShadow(
+            color: theme.primary.withValues(alpha: 0.12),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: RoundedBorderFrame(
+        borderRadius: radius,
+        borderColor: Colors.white.withValues(alpha: 0.23),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: Container(
+            decoration: BoxDecoration(color: const Color(0x801A111C)),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: radius,
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.center,
+                          colors: [
+                            Colors.white.withValues(alpha: 0.09),
+                            Colors.white.withValues(alpha: 0.015),
+                            Colors.transparent,
+                          ],
+                          stops: const [0, 0.22, 0.52],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                TextField(
+                  readOnly: true,
+                  onTap: onTap,
+                  style: TextStyle(color: theme.text, fontSize: 15),
+                  decoration: InputDecoration(
+                    hintText: '搜索片名或关键词',
+                    hintStyle: TextStyle(
+                      color: theme.muted.withValues(alpha: 0.92),
+                    ),
+                    prefixIcon: Icon(
+                      Icons.search_rounded,
+                      size: 24,
+                      color: theme.text,
+                    ),
+                    suffixIcon: Padding(
+                      padding: const EdgeInsetsDirectional.only(end: 15),
+                      child: Icon(
+                        Icons.local_florist_rounded,
+                        size: 19,
+                        color: theme.accent,
+                      ),
+                    ),
+                    filled: false,
+                    fillColor: Colors.transparent,
+                    hoverColor: Colors.transparent,
+                    focusColor: Colors.transparent,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 15,
+                    ),
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return heroEnabled
+        ? Hero(
+            tag: 'zhuying.search-field',
+            child: Material(color: Colors.transparent, child: field),
+          )
+        : field;
+  }
+}
+
+class _MitsuriHeroFeature extends StatelessWidget {
+  const _MitsuriHeroFeature({
+    required this.item,
+    required this.onTap,
+    required this.reduceMotion,
+    required this.height,
+    super.key,
+  });
+
+  final MediaItem item;
+  final VoidCallback onTap;
+  final bool reduceMotion;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.zhuyingTheme;
+    final radius = BorderRadius.circular(23);
+    return Container(
+      height: height,
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        boxShadow: [
+          BoxShadow(
+            color: theme.primary.withValues(alpha: 0.1),
+            blurRadius: 25,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: RoundedBorderFrame(
+        borderRadius: radius,
+        borderColor: Colors.white.withValues(alpha: 0.24),
+        child: Material(
+          color: theme.surface,
+          child: InkWell(
+            onTap: onTap,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Hero(
+                  tag: item.id,
+                  child: MediaPoster(
+                    url: item.posterUrl,
+                    thumbnailUrl: item.thumbnailUrl,
+                    title: '',
+                    headers: item.posterHeaders,
+                    fallbackFontSize: 24,
+                    reduceMotion: reduceMotion,
+                  ),
+                ),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.centerLeft,
+                      end: Alignment.centerRight,
+                      colors: [
+                        Colors.black.withValues(alpha: 0.88),
+                        Colors.black.withValues(alpha: 0.58),
+                        Colors.black.withValues(alpha: 0.14),
+                      ],
+                      stops: const [0, 0.58, 1],
+                    ),
+                  ),
+                ),
+                if (theme.ribbonAsset != null)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Image.asset(
+                        theme.ribbonAsset!,
+                        fit: BoxFit.fill,
+                        filterQuality: FilterQuality.high,
+                        errorBuilder: (context, error, stackTrace) =>
+                            const SizedBox.shrink(),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  left: 22,
+                  right: 22,
+                  bottom: 22,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 620),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.local_movies_rounded,
+                              size: 16,
+                              color: theme.primary,
+                            ),
+                            const SizedBox(width: 7),
+                            Text(
+                              item.isDemo
+                                  ? '${theme.brandName} · 演示片单'
+                                  : '${theme.brandName} · 今日推荐',
+                              style: TextStyle(
+                                color: theme.primary,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        _MitsuriGradientText(
+                          item.title,
+                          maxLines: 2,
+                          style: TextStyle(
+                            fontFamily: theme.displayFontFamily,
+                            fontSize: height < 360 ? 27 : 32,
+                            height: 1.08,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 9),
+                        Text(
+                          [
+                            item.year,
+                            item.region,
+                            item.genre,
+                            item.remarks,
+                          ].where((value) => value.isNotEmpty).join('  ·  '),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                        if (item.description.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            item.description,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                              height: 1.45,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 14),
+                        _MitsuriWatchButton(onTap: onTap),
+                      ],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 18,
+                  top: 14,
+                  child: IgnorePointer(
+                    child: Text(
+                      'Mitsuri',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.72),
+                        fontFamily: theme.signatureFontFamily,
+                        fontSize: 25,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MitsuriWatchButton extends StatelessWidget {
+  const _MitsuriWatchButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.zhuyingTheme;
+    final radius = BorderRadius.circular(26);
+    return RoundedBorderFrame(
+      borderRadius: radius,
+      borderColor: Colors.white.withValues(alpha: 0.42),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            child: Ink(
+              decoration: const BoxDecoration(color: Color(0xB8231522)),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              theme.primary.withValues(alpha: 0.36),
+                              theme.primary.withValues(alpha: 0.14),
+                              theme.secondary.withValues(alpha: 0.2),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 19,
+                      vertical: 11,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.play_arrow_rounded,
+                          size: 20,
+                          color: theme.text,
+                        ),
+                        const SizedBox(width: 7),
+                        Text(
+                          '查看影片',
+                          style: TextStyle(
+                            color: theme.text,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: radius,
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.center,
+                            colors: [
+                              Colors.white.withValues(alpha: 0.13),
+                              Colors.transparent,
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MitsuriPosterRail extends StatelessWidget {
+  const _MitsuriPosterRail({
+    required this.items,
+    required this.favorites,
+    required this.onOpenItem,
+    required this.onFavorite,
+    required this.reduceMotion,
+  });
+
+  final List<MediaItem> items;
+  final Set<String> favorites;
+  final ValueChanged<MediaItem> onOpenItem;
+  final ValueChanged<MediaItem> onFavorite;
+  final bool reduceMotion;
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width < 500 ? 132.0 : 166.0;
+    return SizedBox(
+      height: width / 0.69 + 62,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsetsDirectional.only(start: 4, end: 6),
+        itemCount: items.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 14),
+        itemBuilder: (context, index) {
+          final item = items[index];
+          final favorite = favorites.contains(item.id);
+          return SizedBox(
+            width: width,
+            child: Semantics(
+              button: true,
+              label: '打开 ${item.title}',
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => onOpenItem(item),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            MediaPoster(
+                              url: item.posterUrl,
+                              thumbnailUrl: item.thumbnailUrl,
+                              title: item.title,
+                              headers: item.posterHeaders,
+                              reduceMotion: reduceMotion,
+                            ),
+                            Positioned(
+                              top: 8,
+                              right: 8,
+                              child: IconButton(
+                                tooltip: favorite ? '取消收藏' : '收藏',
+                                style: IconButton.styleFrom(
+                                  backgroundColor: Colors.black.withValues(
+                                    alpha: 0.64,
+                                  ),
+                                  foregroundColor: favorite
+                                      ? ZhuyingColors.primary
+                                      : Colors.white,
+                                ),
+                                onPressed: () => onFavorite(item),
+                                icon: Icon(
+                                  favorite
+                                      ? Icons.bookmark
+                                      : Icons.bookmark_border,
+                                  size: 18,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 9),
+                    Text(
+                      item.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: ZhuyingColors.text,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: 3),
+                    Text(
+                      [
+                        item.year,
+                        item.genre,
+                      ].where((value) => value.isNotEmpty).join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: ZhuyingColors.muted,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _MitsuriPromoCard extends StatelessWidget {
+  const _MitsuriPromoCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.zhuyingTheme;
+    const radius = BorderRadius.all(Radius.circular(22));
+    return Material(
+      color: theme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: radius,
+        side: BorderSide(color: theme.line.withValues(alpha: 0.85)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        height: 126,
+        child: Stack(
+          clipBehavior: Clip.hardEdge,
+          children: [
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      theme.surface,
+                      theme.surfaceRaised.withValues(alpha: 0.72),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _MitsuriRibbonPainter(theme, subtle: true),
+              ),
+            ),
+            Positioned(
+              left: 6,
+              bottom: 0,
+              width: 106,
+              height: 122,
+              child: Image.asset(theme.chibiAsset!, fit: BoxFit.contain),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(116, 22, 18, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '蜜璃的观影时光',
+                    style: TextStyle(
+                      color: theme.text,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  SizedBox(height: 7),
+                  Text(
+                    '把喜欢的故事，收藏进今晚的心动片单。',
+                    maxLines: 2,
+                    style: TextStyle(
+                      color: theme.muted,
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
+                  ),
+                  Spacer(),
+                  Text(
+                    'love every scene  ♡',
+                    style: TextStyle(
+                      color: theme.accent,
+                      fontSize: 11,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MitsuriRibbonPainter extends CustomPainter {
+  const _MitsuriRibbonPainter(this.theme, {this.subtle = false});
+
+  final ZhuyingThemeDefinition theme;
+  final bool subtle;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final alpha = subtle ? 0.17 : 0.42;
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = subtle ? 1.2 : 1.8
+      ..shader = LinearGradient(
+        colors: [
+          theme.primary.withValues(alpha: alpha),
+          theme.secondary.withValues(alpha: alpha * 0.75),
+        ],
+      ).createShader(Offset.zero & size);
+    final path = Path()
+      ..moveTo(-size.width * 0.08, size.height * 0.78)
+      ..cubicTo(
+        size.width * 0.14,
+        size.height * 0.5,
+        size.width * 0.35,
+        size.height * 0.98,
+        size.width * 0.62,
+        size.height * 0.63,
+      )
+      ..cubicTo(
+        size.width * 0.78,
+        size.height * 0.42,
+        size.width * 0.93,
+        size.height * 0.52,
+        size.width * 1.08,
+        size.height * 0.18,
+      );
+    canvas.drawPath(path, paint);
+
+    // A small, deliberately irregular petal field gives the header and promo
+    // surfaces a sense of depth without turning every component into a neon
+    // sticker. These are painted once per surface, so they stay inexpensive
+    // while scrolling.
+    final petalAlpha = subtle ? 0.18 : 0.34;
+    final petals = [
+      (0.11, 0.18, 0.72, 0.18),
+      (0.34, 0.44, 0.52, -0.46),
+      (0.68, 0.2, 0.68, 0.26),
+      (0.86, 0.62, 0.48, -0.22),
+      (0.58, 0.82, 0.42, 0.36),
+    ];
+    for (var index = 0; index < petals.length; index++) {
+      final (x, y, scale, rotation) = petals[index];
+      final center = Offset(size.width * x, size.height * y);
+      final petalPaint = Paint()
+        ..color = (index.isEven ? theme.primary : theme.accent).withValues(
+          alpha: petalAlpha,
+        );
+      canvas.save();
+      canvas.translate(center.dx, center.dy);
+      canvas.rotate(rotation);
+      final petal = Path()
+        ..moveTo(0, -10 * scale)
+        ..cubicTo(9 * scale, -7 * scale, 10 * scale, 5 * scale, 0, 10 * scale)
+        ..cubicTo(
+          -10 * scale,
+          5 * scale,
+          -9 * scale,
+          -7 * scale,
+          0,
+          -10 * scale,
+        )
+        ..close();
+      canvas.drawPath(petal, petalPaint);
+      canvas.restore();
+    }
+
+    final heartPaint = Paint()
+      ..color = theme.primary.withValues(alpha: subtle ? 0.14 : 0.25);
+    for (final (x, y, scale) in [(0.77, 0.22, 0.52), (0.18, 0.7, 0.38)]) {
+      final center = Offset(size.width * x, size.height * y);
+      final heart = Path()
+        ..moveTo(center.dx, center.dy + 8 * scale)
+        ..cubicTo(
+          center.dx - 15 * scale,
+          center.dy - 1 * scale,
+          center.dx - 8 * scale,
+          center.dy - 10 * scale,
+          center.dx,
+          center.dy - 3 * scale,
+        )
+        ..cubicTo(
+          center.dx + 8 * scale,
+          center.dy - 10 * scale,
+          center.dx + 15 * scale,
+          center.dy - 1 * scale,
+          center.dx,
+          center.dy + 8 * scale,
+        )
+        ..close();
+      canvas.drawPath(heart, heartPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MitsuriRibbonPainter oldDelegate) => false;
 }
 
 class _HeroFeature extends StatelessWidget {
@@ -935,7 +2326,7 @@ class _HeroFeature extends StatelessWidget {
                   reduceMotion: reduceMotion,
                 ),
               ),
-              if (!reduceMotion) const Positioned.fill(child: _CurtainLight()),
+              if (!reduceMotion) Positioned.fill(child: _CurtainLight()),
               DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
@@ -950,6 +2341,24 @@ class _HeroFeature extends StatelessWidget {
                   ),
                 ),
               ),
+              if (context.zhuyingTheme.characterAsset != null)
+                Positioned(
+                  right: -8,
+                  bottom: -28,
+                  width: (height * 0.62).clamp(154.0, 250.0).toDouble(),
+                  height: height * 1.35,
+                  child: IgnorePointer(
+                    child: Opacity(
+                      opacity: 0.2,
+                      child: Image.asset(
+                        context.zhuyingTheme.characterAsset!,
+                        fit: BoxFit.contain,
+                        alignment: Alignment.bottomRight,
+                        filterQuality: FilterQuality.medium,
+                      ),
+                    ),
+                  ),
+                ),
               Positioned(
                 left: 24,
                 right: 24,
@@ -962,15 +2371,17 @@ class _HeroFeature extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          const Icon(
+                          Icon(
                             Icons.wb_twilight_rounded,
                             size: 15,
                             color: ZhuyingColors.amber,
                           ),
-                          const SizedBox(width: 7),
+                          SizedBox(width: 7),
                           Text(
-                            item.isDemo ? '烛影 · 演示片单' : '烛影 · 今日推荐',
-                            style: const TextStyle(
+                            item.isDemo
+                                ? '${context.zhuyingTheme.brandName} · 演示片单'
+                                : '${context.zhuyingTheme.brandName} · 今日推荐',
+                            style: TextStyle(
                               color: ZhuyingColors.amber,
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
@@ -978,19 +2389,19 @@ class _HeroFeature extends StatelessWidget {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 9),
+                      SizedBox(height: 9),
                       Text(
                         item.title,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: Colors.white,
                           fontSize: 28,
                           height: 1.12,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                      const SizedBox(height: 9),
+                      SizedBox(height: 9),
                       Text(
                         [
                           item.year,
@@ -998,33 +2409,30 @@ class _HeroFeature extends StatelessWidget {
                           item.genre,
                           item.remarks,
                         ].where((value) => value.isNotEmpty).join('  ·  '),
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 12,
-                        ),
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
                       ),
                       if (item.description.isNotEmpty) ...[
-                        const SizedBox(height: 8),
+                        SizedBox(height: 8),
                         Text(
                           item.description,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: Colors.white70,
                             fontSize: 12,
                             height: 1.45,
                           ),
                         ),
                       ],
-                      const SizedBox(height: 15),
+                      SizedBox(height: 15),
                       FilledButton.icon(
                         onPressed: onTap,
-                        icon: const Icon(Icons.play_arrow_rounded, size: 19),
+                        icon: Icon(Icons.play_arrow_rounded, size: 19),
                         label: const Text('查看影片'),
                         style: FilledButton.styleFrom(
                           backgroundColor: ZhuyingColors.amber,
                           foregroundColor: const Color(0xFF211A10),
-                          padding: const EdgeInsets.symmetric(
+                          padding: EdgeInsets.symmetric(
                             horizontal: 16,
                             vertical: 11,
                           ),
@@ -1062,7 +2470,7 @@ class _HomeHeroPlaceholder extends StatelessWidget {
         ),
         child: Stack(
           children: [
-            const Center(
+            Center(
               child: Icon(
                 Icons.local_movies_outlined,
                 size: 46,
@@ -1083,7 +2491,7 @@ class _HomeHeroPlaceholder extends StatelessWidget {
                       borderRadius: BorderRadius.circular(4),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  SizedBox(height: 12),
                   Container(
                     width: 210,
                     height: 22,
@@ -1147,7 +2555,7 @@ class _HomeLoadingCard extends StatelessWidget {
           aspectRatio: 0.69,
           child: ColoredBox(
             color: ZhuyingColors.surfaceRaised,
-            child: const Center(
+            child: Center(
               child: Icon(
                 Icons.movie_outlined,
                 color: ZhuyingColors.line,
@@ -1156,7 +2564,7 @@ class _HomeLoadingCard extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(height: 9),
+        SizedBox(height: 9),
         FractionallySizedBox(
           widthFactor: 0.78,
           child: Container(
@@ -1167,7 +2575,7 @@ class _HomeLoadingCard extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(height: 7),
+        SizedBox(height: 7),
         FractionallySizedBox(
           widthFactor: 0.48,
           child: Container(
@@ -1247,6 +2655,9 @@ class _ContinueTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (context.zhuyingTheme.isMitsuri) {
+      return _buildMitsuriTile(context);
+    }
     return SizedBox(
       width: 276,
       child: Material(
@@ -1257,23 +2668,29 @@ class _ContinueTile extends StatelessWidget {
           onTap: onTap,
           child: Row(
             children: [
-              SizedBox(
-                width: 78,
-                child: AspectRatio(
-                  aspectRatio: 0.78,
-                  child: MediaPoster(
-                    url: item.posterUrl,
-                    thumbnailUrl: item.thumbnailUrl,
-                    title: '',
-                    headers: item.posterHeaders,
-                    fallbackFontSize: 13,
-                    reduceMotion: reduceMotion,
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 5),
+                child: SizedBox(
+                  width: 78,
+                  child: AspectRatio(
+                    aspectRatio: 0.78,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: MediaPoster(
+                        url: item.posterUrl,
+                        thumbnailUrl: item.thumbnailUrl,
+                        title: '',
+                        headers: item.posterHeaders,
+                        fallbackFontSize: 13,
+                        reduceMotion: reduceMotion,
+                      ),
+                    ),
                   ),
                 ),
               ),
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.all(12),
+                  padding: EdgeInsets.all(12),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -1285,25 +2702,25 @@ class _ContinueTile extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           softWrap: false,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: ZhuyingColors.text,
                             fontWeight: FontWeight.w600,
                             fontSize: 13,
                           ),
                         ),
                       ),
-                      const SizedBox(height: 5),
+                      SizedBox(height: 5),
                       Text(
                         _continueProgressText(item),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: ZhuyingColors.amber,
                           fontSize: 10,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      const SizedBox(height: 9),
+                      SizedBox(height: 9),
                       LinearProgressIndicator(
                         value: item.progress,
                         minHeight: 4,
@@ -1315,6 +2732,92 @@ class _ContinueTile extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMitsuriTile(BuildContext context) {
+    const radius = BorderRadius.all(Radius.circular(11));
+    return SizedBox(
+      width: 276,
+      child: Material(
+        color: ZhuyingColors.surface,
+        borderRadius: radius,
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: radius,
+          child: Padding(
+            padding: const EdgeInsets.all(5),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(7),
+                  child: SizedBox(
+                    width: 74,
+                    child: AspectRatio(
+                      aspectRatio: 0.78,
+                      child: MediaPoster(
+                        url: item.posterUrl,
+                        thumbnailUrl: item.thumbnailUrl,
+                        title: '',
+                        headers: item.posterHeaders,
+                        fallbackFontSize: 13,
+                        reduceMotion: reduceMotion,
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(9),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          height: 20,
+                          child: Text(
+                            _compactContinueTitle(item.title),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            softWrap: false,
+                            style: TextStyle(
+                              color: ZhuyingColors.text,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          _continueProgressText(item),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: ZhuyingColors.amber,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 9),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(3),
+                          child: LinearProgressIndicator(
+                            value: item.progress,
+                            minHeight: 4,
+                            color: ZhuyingColors.amber,
+                            backgroundColor: ZhuyingColors.line,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1402,10 +2905,10 @@ class _PosterGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     if (items.isEmpty) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 20),
+        padding: EdgeInsets.symmetric(vertical: 20),
         child: Text(
           '暂无影片',
-          style: const TextStyle(color: ZhuyingColors.muted, fontSize: 12),
+          style: TextStyle(color: ZhuyingColors.muted, fontSize: 12),
         ),
       );
     }

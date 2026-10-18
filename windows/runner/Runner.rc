@@ -53,6 +53,7 @@ END
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
 IDI_APP_ICON            ICON                    "resources\\app_icon.ico"
+IDI_MITSURI_APP_ICON    ICON                    "resources\\app_icon_mitsuri.ico"
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -90,12 +91,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "app.zhuying" "\0"
-            VALUE "FileDescription", "zhuying" "\0"
+            VALUE "FileDescription", "\u7384\u89c8" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "zhuying" "\0"
+            VALUE "InternalName", "xuanlan" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 app.zhuying. All rights reserved." "\0"
-            VALUE "OriginalFilename", "zhuying.exe" "\0"
-            VALUE "ProductName", "zhuying" "\0"
+            VALUE "OriginalFilename", "xuanlan.exe" "\0"
+            VALUE "ProductName", "\u7384\u89c8" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

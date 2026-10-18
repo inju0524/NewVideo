@@ -47,6 +47,28 @@ void main() {
   );
 
   test(
+    'built-in theme selection is persistent and validates theme ids',
+    () async {
+      final store = AppStore();
+      await store.setTheme('mitsuri');
+
+      expect(store.themeId, 'mitsuri');
+      final preferences = await SharedPreferences.getInstance();
+      expect(preferences.getString('zhuying.theme.v1'), 'mitsuri');
+      store.dispose();
+
+      final restored = AppStore();
+      await restored.initialize(refresh: false);
+      expect(restored.themeId, 'mitsuri');
+
+      await restored.setTheme('theme-that-does-not-exist');
+      expect(restored.themeId, 'default');
+      expect(preferences.getString('zhuying.theme.v1'), 'default');
+      restored.dispose();
+    },
+  );
+
+  test(
     'CMS list and detail requests retain imported authentication headers',
     () async {
       final source = MediaSource(

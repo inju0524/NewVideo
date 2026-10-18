@@ -6,18 +6,34 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models.dart';
+import '../theme/app_theme.dart';
 import 'poster_cache_manager.dart';
 
-abstract final class ZhuyingColors {
-  static const canvas = Color(0xFF111210);
-  static const surface = Color(0xFF1A1B18);
-  static const surfaceRaised = Color(0xFF242521);
-  static const line = Color(0xFF30312C);
-  static const text = Color(0xFFF3F0E8);
-  static const muted = Color(0xFFA6A69D);
-  static const amber = Color(0xFFE9B66E);
-  static const green = Color(0xFF9BB7A0);
-  static const coral = Color(0xFFD88570);
+class RoundedBorderFrame extends StatelessWidget {
+  const RoundedBorderFrame({
+    required this.borderRadius,
+    required this.borderColor,
+    required this.child,
+    this.borderWidth = 1,
+    super.key,
+  });
+
+  final BorderRadius borderRadius;
+  final Color borderColor;
+  final double borderWidth;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      position: DecorationPosition.foreground,
+      decoration: BoxDecoration(
+        borderRadius: borderRadius,
+        border: Border.all(color: borderColor, width: borderWidth),
+      ),
+      child: ClipRRect(borderRadius: borderRadius, child: child),
+    );
+  }
 }
 
 class SearchField extends StatelessWidget {
@@ -62,7 +78,7 @@ class SearchField extends StatelessWidget {
         onChanged: onChanged,
         decoration: InputDecoration(
           hintText: hintText,
-          prefixIcon: const Icon(Icons.search_rounded),
+          prefixIcon: Icon(Icons.search_rounded),
           suffixIcon: suffixIcon,
           isDense: true,
         ),
@@ -163,7 +179,7 @@ class PosterCard extends StatelessWidget {
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Padding(
-                          padding: const EdgeInsets.symmetric(
+                          padding: EdgeInsets.symmetric(
                             horizontal: 7,
                             vertical: 4,
                           ),
@@ -173,7 +189,7 @@ class PosterCard extends StatelessWidget {
                               child: Text(
                                 item.remarks,
                                 softWrap: false,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 10,
                                   fontWeight: FontWeight.w600,
@@ -207,19 +223,19 @@ class PosterCard extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(height: 9),
+            SizedBox(height: 9),
             Text(
               item.title,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 color: ZhuyingColors.text,
                 fontSize: 12,
                 height: 1.18,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: 3),
+            SizedBox(height: 3),
             Text(
               [
                 item.year,
@@ -227,7 +243,7 @@ class PosterCard extends StatelessWidget {
               ].where((value) => value.isNotEmpty).join(' · '),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: ZhuyingColors.muted, fontSize: 11),
+              style: TextStyle(color: ZhuyingColors.muted, fontSize: 11),
             ),
           ],
         ),
@@ -365,9 +381,9 @@ class _MediaPosterState extends State<MediaPoster> {
                         fit: BoxFit.cover,
                         filterQuality: FilterQuality.low,
                       ),
-                      placeholder: (context, url) => const SizedBox.expand(),
+                      placeholder: (context, url) => SizedBox.expand(),
                       errorBuilder: (context, error, stackTrace) =>
-                          const SizedBox.expand(),
+                          SizedBox.expand(),
                     ),
                   ),
                 ),
@@ -396,7 +412,7 @@ class _MediaPosterState extends State<MediaPoster> {
                 return Image(image: imageProvider, fit: BoxFit.cover);
               },
               placeholder: (context, url) => useThumbnail
-                  ? const SizedBox.expand()
+                  ? SizedBox.expand()
                   : _timedOut
                   ? _fallback(canRetry: true)
                   : _fallback(),
@@ -436,12 +452,10 @@ class _MediaPosterState extends State<MediaPoster> {
       fit: StackFit.expand,
       children: [
         if (widget.title.isEmpty)
-          const Center(
-            child: Icon(Icons.movie_outlined, color: ZhuyingColors.muted),
-          )
+          Center(child: Icon(Icons.movie_outlined, color: ZhuyingColors.muted))
         else
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: EdgeInsets.all(12),
             child: Align(
               alignment: Alignment.bottomLeft,
               child: Text(
@@ -465,7 +479,7 @@ class _MediaPosterState extends State<MediaPoster> {
               tooltip: '重新加载封面',
               visualDensity: VisualDensity.compact,
               onPressed: _retry,
-              icon: const Icon(Icons.refresh_rounded, size: 18),
+              icon: Icon(Icons.refresh_rounded, size: 18),
             ),
           ),
       ],
@@ -480,7 +494,7 @@ class _MediaPosterState extends State<MediaPoster> {
       foregroundColor: Colors.white,
     ),
     onPressed: _retry,
-    icon: const Icon(Icons.refresh_rounded, size: 18),
+    icon: Icon(Icons.refresh_rounded, size: 18),
   );
 }
 
@@ -502,26 +516,26 @@ class EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(32),
+        padding: EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, color: ZhuyingColors.amber, size: 34),
-            const SizedBox(height: 14),
+            SizedBox(height: 14),
             Text(
               title,
-              style: const TextStyle(
+              style: TextStyle(
                 color: ZhuyingColors.text,
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
               ),
             ),
             if (detail != null) ...[
-              const SizedBox(height: 6),
+              SizedBox(height: 6),
               Text(
                 detail!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: ZhuyingColors.muted, height: 1.5),
+                style: TextStyle(color: ZhuyingColors.muted, height: 1.5),
               ),
             ],
             ?action,

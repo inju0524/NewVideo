@@ -13,6 +13,7 @@ import 'package:video_player/video_player.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 import 'package:zhuying/src/app_store.dart';
 import 'package:zhuying/src/models.dart';
+import 'package:zhuying/src/theme/app_theme.dart';
 import 'package:zhuying/src/zhuying_app.dart';
 import 'package:zhuying/src/ui/catalog_pages.dart';
 import 'package:zhuying/src/ui/detail_page.dart';
@@ -119,6 +120,57 @@ void main() {
       expect(store.catalog.single.title, 'Reconnected movie');
     },
   );
+
+  testWidgets('app restores and switches the active brand with its theme', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({'zhuying.theme.v1': 'mitsuri'});
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = AppStore()..sources = [];
+    await tester.pumpWidget(ZhuyingApp(store: store));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 450));
+
+    expect(store.themeId, 'mitsuri');
+    expect(tester.widget<MaterialApp>(find.byType(MaterialApp)).title, '我爱看电视');
+    final mitsuriLogo = tester.widget<Image>(
+      find.byKey(const ValueKey('brand-logo-mitsuri-hero')),
+    );
+    expect(
+      (mitsuriLogo.image as AssetImage).assetName,
+      'assets/branding/mitsuri-logo-transparent.png',
+    );
+
+    await store.setTheme('default');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 450));
+
+    expect(tester.widget<MaterialApp>(find.byType(MaterialApp)).title, '玄览');
+    expect(
+      tester
+          .widget<Image>(find.byKey(const ValueKey('brand-logo-default')))
+          .image,
+      isA<AssetImage>(),
+    );
+    expect(
+      (tester
+                  .widget<Image>(
+                    find.byKey(const ValueKey('brand-logo-default')),
+                  )
+                  .image
+              as AssetImage)
+          .assetName,
+      'assets/branding/xuanlan-logo.jpg',
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
 
   testWidgets('media server form keeps the API token obscured', (tester) async {
     await tester.pumpWidget(
@@ -407,6 +459,230 @@ void main() {
 
     store.dispose();
   });
+
+  testWidgets('Mitsuri home branding stays inside its theme', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const featured = MediaItem(
+      id: 'mitsuri-featured',
+      title: 'Mitsuri theme feature',
+      sourceId: 'preset-bfzy',
+      sourceName: 'Test source',
+      contentType: MediaContentType.movie,
+    );
+    final store = AppStore()..catalog = const [featured];
+    final definition = ZhuyingThemes.mitsuri;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: definition.toThemeData().copyWith(
+          extensions: [ZhuyingThemeExtension(definition)],
+        ),
+        home: Scaffold(
+          body: HomePage(
+            store: store,
+            onOpenItem: (_) {},
+            onHistory: () {},
+            onSearch: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('我爱看电视'), findsOneWidget);
+    expect(find.text('MITSURI EDITION · 01'), findsOneWidget);
+    expect(find.text('「小谷专属定制·YSK赠」'), findsOneWidget);
+    expect(find.text('今晚看点什么'), findsOneWidget);
+    expect(find.text('我爱看电视 · 今日推荐'), findsOneWidget);
+    expect(find.text('烛影'), findsNothing);
+    expect(
+      ZhuyingThemes.mitsuri.logoAsset,
+      'assets/branding/mitsuri-logo-transparent.png',
+    );
+    final heroLogo = tester.widget<Image>(
+      find.byKey(const ValueKey('brand-logo-mitsuri-hero')),
+    );
+    expect((heroLogo.image as AssetImage).assetName, definition.logoAsset);
+    final portraitRect = tester.getRect(
+      find.byKey(const ValueKey('mitsuri-main-portrait')),
+    );
+    final stageRect = tester.getRect(
+      find.byKey(const ValueKey('mitsuri-intro-stage')),
+    );
+    final searchRect = tester.getRect(
+      find.byKey(const ValueKey('mitsuri-search-field')),
+    );
+    final bannerRect = tester.getRect(
+      find.byKey(const ValueKey('mitsuri-hero-mitsuri-featured')),
+    );
+    final headingRect = tester.getRect(find.text('今晚看点什么'));
+    final flowerRect = tester.getRect(
+      find.byKey(const ValueKey('mitsuri-heading-flower')),
+    );
+    expect(portraitRect.width, closeTo(151.2, 0.1));
+    expect(stageRect.height, closeTo(302, 0.1));
+    expect(portraitRect.bottom, closeTo(searchRect.bottom, 0.1));
+    expect(searchRect.right - portraitRect.right, closeTo(10, 0.1));
+    expect(bannerRect.top - searchRect.bottom, closeTo(26, 0.1));
+    expect(flowerRect.left - headingRect.right, closeTo(8, 0.1));
+    expect(headingRect.top, lessThan(240));
+    final searchField = tester.widget<TextField>(find.byType(TextField));
+    expect(searchField.decoration!.filled, isFalse);
+    expect(searchField.decoration!.fillColor, Colors.transparent);
+    store.dispose();
+  });
+
+  testWidgets(
+    'Mitsuri search Hero can open and return without Material errors',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final store = AppStore()..catalog = const [];
+      final definition = ZhuyingThemes.mitsuri;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: definition.toThemeData().copyWith(
+            extensions: [ZhuyingThemeExtension(definition)],
+          ),
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: HomePage(
+                store: store,
+                onOpenItem: (_) {},
+                onHistory: () {},
+                onSearch: (_) {
+                  Navigator.of(context).push<void>(
+                    PageRouteBuilder<void>(
+                      pageBuilder: (context, animation, secondaryAnimation) =>
+                          SearchPage(
+                            store: store,
+                            initialQuery: '',
+                            onOpenItem: (_) {},
+                            heroEnabled: true,
+                          ),
+                      transitionsBuilder: (
+                        context,
+                        animation,
+                        secondaryAnimation,
+                        child,
+                      ) => FadeTransition(opacity: animation, child: child),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.byType(TextField).first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 180));
+      await tester.pump(const Duration(milliseconds: 240));
+      expect(find.byTooltip('返回'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('返回'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 180));
+      await tester.pump(const Duration(milliseconds: 240));
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('今晚看点什么'), findsOneWidget);
+      store.dispose();
+    },
+  );
+
+  testWidgets('default home uses Xuanlan branding', (tester) async {
+    const featured = MediaItem(
+      id: 'default-featured',
+      title: 'Default theme feature',
+      sourceId: 'preset-bfzy',
+      sourceName: 'Test source',
+      contentType: MediaContentType.movie,
+    );
+    final store = AppStore()..catalog = const [featured];
+    final definition = ZhuyingThemes.defaultTheme;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: definition.toThemeData().copyWith(
+          extensions: [ZhuyingThemeExtension(definition)],
+        ),
+        home: Scaffold(
+          body: HomePage(
+            store: store,
+            onOpenItem: (_) {},
+            onHistory: () {},
+            onSearch: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('玄览 · 今日推荐'), findsOneWidget);
+    expect(find.text('烛影'), findsNothing);
+    expect(
+      ZhuyingThemes.defaultTheme.logoAsset,
+      'assets/branding/xuanlan-logo.jpg',
+    );
+    expect(find.text('我爱看电视'), findsNothing);
+    expect(find.text('今晚看点什么'), findsOneWidget);
+    store.dispose();
+  });
+
+  testWidgets(
+    'theme options draw rounded borders above their clipped content',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final store = AppStore();
+      final definition = ZhuyingThemes.defaultTheme;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: definition.toThemeData().copyWith(
+            extensions: [ZhuyingThemeExtension(definition)],
+          ),
+          home: Scaffold(body: SettingsPage(store: store)),
+        ),
+      );
+      await tester.pump();
+
+      final tile = tester.widget<RoundedBorderFrame>(
+        find.byKey(const ValueKey('theme-option-default')),
+      );
+      expect(tile.borderRadius, BorderRadius.circular(8));
+      expect(tile.borderWidth, 1.5);
+      expect(tile.borderColor, definition.primary);
+
+      final outerDecoration = tester.widget<DecoratedBox>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('theme-option-default')),
+              matching: find.byType(DecoratedBox),
+            )
+            .first,
+      );
+      expect(outerDecoration.position, DecorationPosition.foreground);
+
+      final mitsuriTile = tester.widget<RoundedBorderFrame>(
+        find.byKey(const ValueKey('theme-option-mitsuri')),
+      );
+      expect(mitsuriTile.borderRadius, BorderRadius.circular(8));
+      expect(mitsuriTile.borderWidth, 1);
+      expect(mitsuriTile.borderColor, ZhuyingThemes.mitsuri.line);
+      store.dispose();
+    },
+  );
 
   testWidgets('first home load shows placeholders instead of demo titles', (
     tester,

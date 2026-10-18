@@ -1,8 +1,12 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <variant>
+#include <flutter/method_channel.h>
+#include <flutter/standard_method_codec.h>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "resource.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -27,6 +31,54 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  HINSTANCE instance = GetModuleHandle(nullptr);
+  HICON xuanlan_icon = LoadIcon(instance, MAKEINTRESOURCE(IDI_APP_ICON));
+  mitsuri_icon_ = LoadIcon(instance, MAKEINTRESOURCE(IDI_MITSURI_APP_ICON));
+  if (xuanlan_icon != nullptr) {
+    SendMessage(GetHandle(), WM_SETICON, ICON_SMALL,
+                reinterpret_cast<LPARAM>(xuanlan_icon));
+    SendMessage(GetHandle(), WM_SETICON, ICON_BIG,
+                reinterpret_cast<LPARAM>(xuanlan_icon));
+  }
+  branding_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "zhuying/app-icon",
+      &flutter::StandardMethodCodec::GetInstance());
+  branding_channel_->SetMethodCallHandler(
+      [this, xuanlan_icon](
+          const flutter::MethodCall<flutter::EncodableValue>& call,
+          std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+        if (call.method_name() != "setLauncherIcon") {
+          result->NotImplemented();
+          return;
+        }
+        const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
+        if (arguments == nullptr) {
+          result->Error("invalid_arguments", "Expected theme arguments");
+          return;
+        }
+        const auto theme_entry = arguments->find(flutter::EncodableValue("isMitsuri"));
+        const auto* use_mitsuri = theme_entry == arguments->end()
+                                      ? nullptr
+                                      : std::get_if<bool>(&theme_entry->second);
+        if (use_mitsuri == nullptr) {
+          result->Error("invalid_arguments", "Expected theme flag");
+          return;
+        }
+        const HICON icon = *use_mitsuri ? mitsuri_icon_ : xuanlan_icon;
+        if (icon == nullptr) {
+          result->Error("icon_load_failed", "Unable to load app icon");
+          return;
+        }
+        SetWindowTextW(GetHandle(), *use_mitsuri
+                                        ? L"\u6211\u7231\u770b\u7535\u89c6"
+                                        : L"\u7384\u89c8");
+        SendMessage(GetHandle(), WM_SETICON, ICON_SMALL,
+                    reinterpret_cast<LPARAM>(icon));
+        SendMessage(GetHandle(), WM_SETICON, ICON_BIG,
+                    reinterpret_cast<LPARAM>(icon));
+        result->Success();
+      });
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -40,6 +92,10 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (branding_channel_) {
+    branding_channel_->SetMethodCallHandler(nullptr);
+    branding_channel_.reset();
+  }
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

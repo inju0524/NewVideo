@@ -1,11 +1,11 @@
 {
-    "name": "烛影",
-    "short_name": "烛影",
+    "name": "玄览",
+    "short_name": "玄览",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#111210",
     "theme_color": "#111210",
-    "description": "烛影影视片库",
+    "description": "玄览影视片库",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

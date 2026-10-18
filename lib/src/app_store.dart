@@ -9,6 +9,7 @@ import 'package:xml/xml.dart';
 
 import 'models.dart';
 import 'source_importer.dart';
+import 'theme/app_theme.dart';
 
 class AppStore extends ChangeNotifier {
   AppStore({
@@ -32,6 +33,7 @@ class AppStore extends ChangeNotifier {
   static const _localItemsKey = 'zhuying.localItems.v1';
   static const _motionKey = 'zhuying.reduceMotion.v1';
   static const _autoplayKey = 'zhuying.autoplayNext.v1';
+  static const _themeKey = 'zhuying.theme.v1';
   static const _initialCatalogPages = 1;
   static const _catalogPagesPerLoadMore = 2;
   static const _maxCategoryPagesPerLoad = 2;
@@ -69,6 +71,7 @@ class AppStore extends ChangeNotifier {
   bool hasInitialized = false;
   bool reduceMotion = false;
   bool autoplayNext = true;
+  String themeId = ZhuyingThemes.defaultTheme.id;
   String? refreshMessage;
   bool isLoadingMoreCatalog = false;
   bool _disposed = false;
@@ -279,6 +282,9 @@ class AppStore extends ChangeNotifier {
     catalog = const [];
     reduceMotion = preferences.getBool(_motionKey) ?? false;
     autoplayNext = preferences.getBool(_autoplayKey) ?? true;
+    themeId = ZhuyingThemes.byId(
+      preferences.getString(_themeKey) ?? ZhuyingThemes.defaultTheme.id,
+    ).id;
     hasInitialized = true;
     notifyListeners();
 
@@ -1159,6 +1165,15 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setTheme(String value) async {
+    final next = ZhuyingThemes.byId(value).id;
+    if (themeId == next) return;
+    themeId = next;
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString(_themeKey, next);
+    notifyListeners();
+  }
+
   Future<void> addMediaServer({
     required String name,
     required String endpoint,
@@ -1864,7 +1879,7 @@ class AppStore extends ChangeNotifier {
       'Accept': 'application/json, text/plain, */*',
       ...headers,
     };
-    if (!kIsWeb) requestHeaders['User-Agent'] = 'Zhuying/1.0 Flutter';
+    if (!kIsWeb) requestHeaders['User-Agent'] = 'Xuanlan/1.0 Flutter';
     return _client.get(uri, headers: requestHeaders).timeout(timeout);
   }
 

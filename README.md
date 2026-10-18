@@ -1,4 +1,4 @@
-# 烛影
+# 玄览
 
 Flutter 影视浏览与播放应用，支持订阅源搜索、分类筛选、播放进度记录及封面缓存。
 
@@ -57,6 +57,18 @@ flutter run -d web-server --web-hostname 127.0.0.1 --web-port 8123
 ```
 
 The proxy only binds to `127.0.0.1` and does not log source URLs or credentials.
+
+## 内置主题与品牌资源
+
+主题品牌名和应用内 Logo 在 `lib/src/theme/app_theme.dart` 中维护。新增主题时，为其配置 `brandName` 与 `logoAsset`，然后为 Android launcher alias、iOS alternate icon、Windows 图标资源及 Web PWA manifest 增加对应平台图标。使用安装有 Pillow、NumPy 和 SciPy 的 Python 运行 `python tool/generate_branding_assets.py`，可从 `素材/` 下的主题 Logo 重新生成各平台图标尺寸。
+
+Android 和 iOS 原生桌面图标会在主题切换时更新；iOS 主屏幕显示名保持静态为“玄览”，系统仅支持动态切换图标。Web 页签图标与安装清单随主题切换，已安装 PWA 的图标由浏览器自行刷新。
+
+## 移动端 Release
+
+发布版本号统一维护在 `pubspec.yaml`。推送 `v*` 格式的版本标签后，GitHub Actions 会在该标签指向的提交上运行静态分析和测试，构建 Android APK 及 iOS IPA，并创建附带 SHA-256 校验文件的 GitHub Release。Android APK 使用仓库现有的 debug 签名，仅适用于侧载测试；正式商店发布前应改用受保护的 release keystore。
+
+iOS Release 在配置 `IOS_CERTIFICATE_P12_BASE64`、`IOS_CERTIFICATE_PASSWORD`、`IOS_PROVISIONING_PROFILE_BASE64` 和 `IOS_TEAM_ID` 四个仓库 Secrets 时构建 Ad Hoc IPA；profile 必须包含目标 iPhone 的 UDID。未配置这些 Secrets 时，工作流仍生成 unsigned IPA，但它不能安装到 iPhone。
 
 ## 开发与测试
 
