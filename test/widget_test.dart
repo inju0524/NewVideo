@@ -172,7 +172,7 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('iOS uses the native dock for both built-in themes', (
+  testWidgets('iOS home scroll tails clear the native dock in both themes', (
     tester,
   ) async {
     tester.view.devicePixelRatio = 1;
@@ -181,21 +181,39 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     final store = AppStore()..sources = [];
-    await tester.pumpWidget(ZhuyingApp(store: store));
-    await tester.pump();
-    expect(find.byType(UiKitView), findsOneWidget);
-    expect(find.byType(NavigationDestination), findsNothing);
 
-    await store.setTheme('mitsuri');
-    await tester.pump();
-    expect(find.byType(UiKitView), findsOneWidget);
-    expect(find.byType(NavigationDestination), findsNothing);
+    Future<void> pumpHome(ZhuyingThemeDefinition definition) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: definition.toThemeData().copyWith(
+            extensions: [ZhuyingThemeExtension(definition)],
+          ),
+          home: Scaffold(
+            body: HomePage(
+              store: store,
+              onOpenItem: (_) {},
+              onHistory: () {},
+              onSearch: (_) {},
+              nativeBottomInset: 34,
+            ),
+          ),
+        ),
+      );
+    }
 
-    await store.setTheme('default');
-    await tester.pump();
-    expect(find.byType(UiKitView), findsOneWidget);
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox.shrink());
+    await pumpHome(ZhuyingThemes.defaultTheme);
+    final defaultScroll = tester.widget<SingleChildScrollView>(
+      find.byType(SingleChildScrollView).first,
+    );
+    expect(defaultScroll.padding, const EdgeInsets.fromLTRB(18, 26, 18, 146));
+
+    await pumpHome(ZhuyingThemes.mitsuri);
+    await tester.pump(const Duration(milliseconds: 300));
+    final mitsuriScroll = tester.widget<SingleChildScrollView>(
+      find.byType(SingleChildScrollView).first,
+    );
+    expect(mitsuriScroll.padding, const EdgeInsets.fromLTRB(18, 0, 18, 152));
+    store.dispose();
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
   testWidgets('media server form keeps the API token obscured', (tester) async {
@@ -520,7 +538,7 @@ void main() {
 
     expect(find.text('我爱看电视'), findsOneWidget);
     expect(find.text('MITSURI EDITION · 01'), findsOneWidget);
-    expect(find.text('「小谷专属定制·YSK赠」'), findsOneWidget);
+    expect(find.text('「小Y专属定制·YSK赠」'), findsOneWidget);
     expect(find.text('今晚看点什么'), findsOneWidget);
     expect(find.text('我爱看电视 · 今日推荐'), findsOneWidget);
     expect(find.text('烛影'), findsNothing);

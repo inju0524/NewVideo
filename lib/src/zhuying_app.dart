@@ -273,6 +273,9 @@ class _AppShellState extends State<AppShell>
       builder: (context, _) => LayoutBuilder(
         builder: (context, constraints) {
           final desktop = constraints.maxWidth >= 900;
+          final nativeBottomInset = _isNativeIosDock
+              ? MediaQuery.viewPaddingOf(context).bottom
+              : 0.0;
           return Scaffold(
             extendBody: !desktop && _isNativeIosDock,
             body: ZhuyingThemeBackdrop(
@@ -280,7 +283,7 @@ class _AppShellState extends State<AppShell>
               showCharacter:
                   !(_selectedIndex == 0 && context.zhuyingTheme.isMitsuri),
               child: SafeArea(
-                bottom: !desktop,
+                bottom: !desktop && (!_isNativeIosDock || _selectedIndex != 0),
                 child: Row(
                   children: [
                     if (desktop)
@@ -314,7 +317,11 @@ class _AppShellState extends State<AppShell>
                                   children: [
                                     for (var index = 0; index < 4; index++)
                                       if (_visitedTabs[index])
-                                        _tabPage(index, eased),
+                                        _tabPage(
+                                          index,
+                                          eased,
+                                          nativeBottomInset: nativeBottomInset,
+                                        ),
                                   ],
                                 );
                               },
@@ -335,7 +342,7 @@ class _AppShellState extends State<AppShell>
                     onSelected: _select,
                     channel: _nativeDockChannel,
                     theme: ZhuyingThemes.byId(widget.store.themeId),
-                    bottomInset: MediaQuery.paddingOf(context).bottom,
+                    bottomInset: nativeBottomInset,
                   )
                 : context.zhuyingTheme.isMitsuri
                 ? _MitsuriNavigationBar(
@@ -360,7 +367,11 @@ class _AppShellState extends State<AppShell>
     );
   }
 
-  Widget _tabPage(int index, double transitionValue) {
+  Widget _tabPage(
+    int index,
+    double transitionValue, {
+    required double nativeBottomInset,
+  }) {
     final selected = index == _selectedIndex;
     final transitioningOut =
         index == _previousIndex && _previousIndex != _selectedIndex;
@@ -376,6 +387,7 @@ class _AppShellState extends State<AppShell>
         onOpenItem: _openItem,
         onHistory: () => _select(3),
         onSearch: (value) => _openSearch(value, true),
+        nativeBottomInset: nativeBottomInset,
       ),
       1 => CategoriesPage(store: widget.store, onOpenItem: _openItem),
       2 => SourcesPage(store: widget.store),
@@ -383,10 +395,10 @@ class _AppShellState extends State<AppShell>
     };
     // Keep the immersive Mitsuri home transparent so its scene can continue
     // behind the content; other pages retain an opaque surface during fades.
-    // The Mitsuri edition keeps the atmospheric layer visible across the
-    // primary tabs so the theme reads as one visual world, while the default
-    // edition retains the original opaque page surfaces.
-    final pageSurface = context.zhuyingTheme.isMitsuri
+    // Keep themed pages atmospheric and let the iOS home reveal content behind
+    // its native glass dock; other default-theme pages keep opaque surfaces.
+    final nativeIosHome = _isNativeIosDock && index == 0;
+    final pageSurface = context.zhuyingTheme.isMitsuri || nativeIosHome
         ? page
         : ColoredBox(color: ZhuyingColors.canvas, child: page);
     return Offstage(
@@ -609,8 +621,7 @@ class _NativeIosDockState extends State<_NativeIosDock> {
       widget.channel.setMethodCallHandler(_handleNativeSelection);
     }
     if (oldWidget.selectedIndex != widget.selectedIndex ||
-        oldWidget.theme.id != widget.theme.id ||
-        oldWidget.bottomInset != widget.bottomInset) {
+        oldWidget.theme.id != widget.theme.id) {
       unawaited(_applyNativeTheme());
     }
   }
@@ -628,7 +639,6 @@ class _NativeIosDockState extends State<_NativeIosDock> {
         'primary': widget.theme.primary.toARGB32(),
         'muted': widget.theme.muted.toARGB32(),
         'selectedIndex': widget.selectedIndex,
-        'bottomInset': widget.bottomInset,
       });
     } on MissingPluginException {
       // The platform view may not have been created yet.
@@ -646,21 +656,24 @@ class _NativeIosDockState extends State<_NativeIosDock> {
   @override
   Widget build(BuildContext context) {
     final characterClearance = widget.theme.isMitsuri ? 28.0 : 0.0;
-    return SizedBox(
-      height: 58 + widget.bottomInset + characterClearance,
-      child: UiKitView(
-        viewType: 'zhuying/native-glass-dock',
-        creationParams: {
-          'selectedIndex': widget.selectedIndex,
-          'bottomInset': widget.bottomInset,
-          'isMitsuri': widget.theme.isMitsuri,
-          'primary': widget.theme.primary.toARGB32(),
-          'muted': widget.theme.muted.toARGB32(),
-        },
-        creationParamsCodec: const StandardMessageCodec(),
-        onPlatformViewCreated: (_) async {
-          await _applyNativeTheme();
-        },
+    const dockHeight = 68.0;
+    return Padding(
+      padding: EdgeInsets.only(bottom: widget.bottomInset),
+      child: SizedBox(
+        height: dockHeight + characterClearance,
+        child: UiKitView(
+          viewType: 'zhuying/native-glass-dock',
+          creationParams: {
+            'selectedIndex': widget.selectedIndex,
+            'isMitsuri': widget.theme.isMitsuri,
+            'primary': widget.theme.primary.toARGB32(),
+            'muted': widget.theme.muted.toARGB32(),
+          },
+          creationParamsCodec: const StandardMessageCodec(),
+          onPlatformViewCreated: (_) async {
+            await _applyNativeTheme();
+          },
+        ),
       ),
     );
   }
@@ -944,6 +957,7 @@ class HomePage extends StatelessWidget {
     required this.onOpenItem,
     required this.onHistory,
     required this.onSearch,
+    this.nativeBottomInset = 0,
     super.key,
   });
 
@@ -951,6 +965,7 @@ class HomePage extends StatelessWidget {
   final ValueChanged<MediaItem> onOpenItem;
   final VoidCallback onHistory;
   final ValueChanged<String> onSearch;
+  final double nativeBottomInset;
 
   @override
   Widget build(BuildContext context) {
@@ -978,6 +993,7 @@ class HomePage extends StatelessWidget {
         onOpenItem: onOpenItem,
         onHistory: onHistory,
         onSearch: onSearch,
+        nativeBottomInset: nativeBottomInset,
         items: items,
         continueItems: continueItems,
         recommendationItems: recommendationItems,
@@ -990,8 +1006,20 @@ class HomePage extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final horizontal = constraints.maxWidth < 700 ? 18.0 : 36.0;
+        final nativeDock =
+            !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+        final bottomPadding = constraints.maxWidth < 700
+            ? nativeDock
+                  ? 112.0 + nativeBottomInset
+                  : 34.0
+            : 34.0;
         return SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(horizontal, 26, horizontal, 34),
+          padding: EdgeInsets.fromLTRB(
+            horizontal,
+            26,
+            horizontal,
+            bottomPadding,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1131,6 +1159,7 @@ class _MitsuriHomeLayout extends StatelessWidget {
     required this.onOpenItem,
     required this.onHistory,
     required this.onSearch,
+    required this.nativeBottomInset,
     required this.items,
     required this.continueItems,
     required this.recommendationItems,
@@ -1144,6 +1173,7 @@ class _MitsuriHomeLayout extends StatelessWidget {
   final ValueChanged<MediaItem> onOpenItem;
   final VoidCallback onHistory;
   final ValueChanged<String> onSearch;
+  final double nativeBottomInset;
   final List<MediaItem> items;
   final List<MediaItem> continueItems;
   final List<MediaItem> recommendationItems;
@@ -1162,7 +1192,10 @@ class _MitsuriHomeLayout extends StatelessWidget {
         // generous scroll tail so the promo scene and the last poster row can
         // always be brought fully above the dock and its safe area.
         final bottomPadding = narrow
-            ? 118.0 + MediaQuery.paddingOf(context).bottom
+            ? 118.0 +
+                  (nativeBottomInset > 0
+                      ? nativeBottomInset
+                      : MediaQuery.paddingOf(context).bottom)
             : 34.0;
         final railItems = recommendations.isNotEmpty
             ? recommendations.take(12).toList()
@@ -1448,7 +1481,7 @@ class _MitsuriIntroStage extends StatelessWidget {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      '「小谷专属定制·YSK赠」',
+                      '「小Y专属定制·YSK赠」',
                       style: TextStyle(
                         color: theme.muted.withValues(alpha: 0.9),
                         fontSize: 9,

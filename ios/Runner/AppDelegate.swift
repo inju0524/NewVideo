@@ -146,7 +146,6 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
   private var chibiSpacerItem: UITabBarItem?
   private var appItems: [UITabBarItem] = []
   private var isMitsuri = false
-  private var bottomInset: CGFloat
 
   init(
     frame: CGRect,
@@ -154,11 +153,8 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
     onSelect: @escaping (Int) -> Void
   ) {
     container = NativeDockContainerView(frame: frame)
-    tabBar = UITabBar(frame: CGRect(x: 0, y: 0, width: frame.width, height: 58))
+    tabBar = UITabBar(frame: CGRect(x: 0, y: 0, width: frame.width, height: 68))
     self.onSelect = onSelect
-    bottomInset = CGFloat(
-      (arguments["bottomInset"] as? NSNumber)?.doubleValue ?? 0
-    )
     chibiView = UIImageView(image: UIImage(named: "MitsuriDockChibi"))
     super.init()
 
@@ -193,6 +189,7 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
       ),
     ]
     let spacerItem = UITabBarItem(title: "", image: nil, selectedImage: nil)
+    spacerItem.isEnabled = false
     chibiSpacerItem = spacerItem
     tabBar.items = [spacerItem] + appItems
     applyTheme(arguments: arguments)
@@ -220,9 +217,6 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
 
   func applyTheme(arguments: [String: Any]) {
     isMitsuri = arguments["isMitsuri"] as? Bool ?? false
-    if let inset = arguments["bottomInset"] as? NSNumber {
-      bottomInset = CGFloat(inset.doubleValue)
-    }
     let primaryValue = (arguments["primary"] as? NSNumber)?.uint32Value
     let mutedValue = (arguments["muted"] as? NSNumber)?.uint32Value
     tabBar.tintColor = primaryValue.map { UIColor(argb: $0) }
@@ -252,7 +246,10 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
 
   private func updateLayout(in bounds: CGRect) {
     let topInset: CGFloat = isMitsuri ? 28 : 0
-    let barHeight = max(58, bounds.height - bottomInset - topInset)
+    let measuredHeight = tabBar.sizeThatFits(
+      CGSize(width: bounds.width, height: CGFloat.greatestFiniteMagnitude)
+    ).height
+    let barHeight = max(68, measuredHeight)
     tabBar.frame = CGRect(
       x: 0,
       y: topInset,
@@ -267,13 +264,15 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
     )
   }
 
+  func tabBar(_ tabBar: UITabBar, shouldSelect item: UITabBarItem) -> Bool {
+    guard isMitsuri, let spacer = chibiSpacerItem, item === spacer else {
+      return true
+    }
+    return false
+  }
+
   func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
     guard let nativeIndex = tabBar.items?.firstIndex(where: { $0 === item }) else { return }
-    if isMitsuri && nativeIndex == 0 {
-      select(index: 0)
-      onSelect(0)
-      return
-    }
     let appIndex = nativeIndex - (isMitsuri ? 1 : 0)
     guard appItems.indices.contains(appIndex) else { return }
     onSelect(appIndex)
