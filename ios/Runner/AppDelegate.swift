@@ -269,8 +269,12 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
 
   func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
     guard let nativeIndex = tabBar.items?.firstIndex(where: { $0 === item }) else { return }
-    guard nativeIndex > 0 else { return }
-    let appIndex = nativeIndex - 1
+    if isMitsuri && nativeIndex == 0 {
+      select(index: 0)
+      onSelect(0)
+      return
+    }
+    let appIndex = nativeIndex - (isMitsuri ? 1 : 0)
     guard appItems.indices.contains(appIndex) else { return }
     onSelect(appIndex)
   }
