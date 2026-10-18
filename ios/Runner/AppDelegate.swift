@@ -257,14 +257,38 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
       height: barHeight
     )
     let characterWidth = isMitsuri ? min(62, bounds.width * 0.17) : 0
-    let itemCount = max(1, tabBar.items?.count ?? 1)
-    let spacerCenter = bounds.width / CGFloat(itemCount) / 2
+    tabBar.layoutIfNeeded()
+    let spacerCenter = mitsuriSpacerCenterX()
     chibiView.frame = CGRect(
-      x: isMitsuri ? spacerCenter - characterWidth / 2 : 0,
+      x: isMitsuri ? (spacerCenter ?? bounds.midX) - characterWidth / 2 : 0,
       y: 0,
       width: characterWidth,
       height: isMitsuri ? topInset + barHeight : 0
     )
+  }
+
+  private func mitsuriSpacerCenterX() -> CGFloat? {
+    guard isMitsuri else { return nil }
+
+    var tabButtons: [UIView] = []
+    func collectTabButtons(from view: UIView) {
+      for subview in view.subviews {
+        if String(describing: type(of: subview)).contains("UITabBarButton") {
+          tabButtons.append(subview)
+        } else {
+          collectTabButtons(from: subview)
+        }
+      }
+    }
+    collectTabButtons(from: tabBar)
+
+    let spacerButton = tabButtons.sorted {
+      $0.convert($0.bounds, to: tabBar).minX < $1.convert($1.bounds, to: tabBar).minX
+    }.first
+
+    guard let spacerButton else { return nil }
+    let center = CGPoint(x: spacerButton.bounds.midX, y: spacerButton.bounds.midY)
+    return spacerButton.convert(center, to: container).x
   }
 
   func tabBar(_ tabBar: UITabBar, shouldSelect item: UITabBarItem) -> Bool {
