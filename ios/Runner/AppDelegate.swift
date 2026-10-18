@@ -265,7 +265,7 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
     dockController.setViewControllers(controllers, animated: false)
     tabBar.itemPositioning = isMitsuri ? .fill : .automatic
     if #available(iOS 26.0, *) {
-      dockController.tabBarMinimizeBehavior = isMitsuri ? .never : .automatic
+      dockController.tabBarMinimizeBehavior = .never
     }
     if let selectedIndex = arguments["selectedIndex"] as? Int {
       select(index: selectedIndex)
