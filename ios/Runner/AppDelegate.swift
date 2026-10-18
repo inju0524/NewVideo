@@ -58,10 +58,16 @@ private let dockChannelName = "zhuying/native-dock"
 
 private final class NativeDockContainerView: UIView {
   var onLayout: ((CGRect) -> Void)?
+  var onWindowChange: ((Bool) -> Void)?
 
   override func layoutSubviews() {
     super.layoutSubviews()
     onLayout?(bounds)
+  }
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    onWindowChange?(window != nil)
   }
 }
 
@@ -138,14 +144,19 @@ private final class NativeGlassDockFactory: NSObject, FlutterPlatformViewFactory
   }
 }
 
-private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBarDelegate {
+private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBarControllerDelegate {
   private let container: NativeDockContainerView
+  private let dockController: UITabBarController
   private let tabBar: UITabBar
   private let chibiView: UIImageView
   private let onSelect: (Int) -> Void
-  private var chibiSpacerItem: UITabBarItem?
+  private var defaultStandardAppearance: UITabBarAppearance!
+  private var defaultScrollEdgeAppearance: UITabBarAppearance?
   private var appItems: [UITabBarItem] = []
+  private var spacerController: UIViewController?
+  private var appControllers: [UIViewController] = []
   private var isMitsuri = false
+  private var isApplyingSelection = false
 
   init(
     frame: CGRect,
@@ -153,17 +164,21 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
     onSelect: @escaping (Int) -> Void
   ) {
     container = NativeDockContainerView(frame: frame)
-    tabBar = UITabBar(frame: CGRect(x: 0, y: 0, width: frame.width, height: 68))
+    dockController = UITabBarController()
+    tabBar = dockController.tabBar
     self.onSelect = onSelect
     chibiView = UIImageView(image: UIImage(named: "MitsuriDockChibi"))
     super.init()
 
     container.backgroundColor = .clear
     container.clipsToBounds = false
-    tabBar.delegate = self
+    dockController.delegate = self
+    dockController.view.backgroundColor = .clear
+    dockController.view.clipsToBounds = false
     tabBar.overrideUserInterfaceStyle = .dark
-    tabBar.autoresizingMask = [.flexibleWidth]
     tabBar.isTranslucent = true
+    defaultStandardAppearance = tabBar.standardAppearance.copy() as? UITabBarAppearance
+    defaultScrollEdgeAppearance = tabBar.scrollEdgeAppearance?.copy() as? UITabBarAppearance
     chibiView.contentMode = .scaleAspectFit
     chibiView.isUserInteractionEnabled = false
     chibiView.accessibilityElementsHidden = true
@@ -190,18 +205,38 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
     ]
     let spacerItem = UITabBarItem(title: "", image: nil, selectedImage: nil)
     spacerItem.isEnabled = false
-    chibiSpacerItem = spacerItem
-    tabBar.items = [spacerItem] + appItems
+    let spacer = UIViewController()
+    spacer.tabBarItem = spacerItem
+    spacer.view.backgroundColor = .clear
+    spacerController = spacer
+    appControllers = appItems.map { item in
+      let controller = UIViewController()
+      controller.tabBarItem = item
+      controller.view.backgroundColor = .clear
+      return controller
+    }
+    dockController.setViewControllers(appControllers, animated: false)
     applyTheme(arguments: arguments)
-    container.addSubview(tabBar)
-    container.addSubview(chibiView)
     container.onLayout = { [weak self] bounds in
-      self?.updateLayout(in: bounds)
+      guard let self else { return }
+      if self.dockController.parent == nil {
+        self.attachDockController()
+      } else {
+        self.updateLayout(in: bounds)
+      }
+    }
+    container.onWindowChange = { [weak self] isAttached in
+      if isAttached {
+        self?.attachDockController()
+      } else {
+        self?.detachDockController()
+      }
     }
   }
 
   deinit {
-    tabBar.delegate = nil
+    dockController.delegate = nil
+    detachDockController()
   }
 
   func view() -> UIView {
@@ -209,10 +244,10 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
   }
 
   func select(index: Int) {
-    guard let items = tabBar.items, items.indices.contains(index) else { return }
-    let nativeIndex = index + (isMitsuri ? 1 : 0)
-    guard items.indices.contains(nativeIndex) else { return }
-    tabBar.selectedItem = items[nativeIndex]
+    guard appControllers.indices.contains(index) else { return }
+    isApplyingSelection = true
+    dockController.selectedViewController = appControllers[index]
+    isApplyingSelection = false
   }
 
   func applyTheme(arguments: [String: Any]) {
@@ -223,85 +258,154 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
       ?? UIColor(argb: 0xFFE9B66E)
     tabBar.unselectedItemTintColor = mutedValue.map { UIColor(argb: $0) }
       ?? .secondaryLabel
-    let spacerItems = isMitsuri ? [chibiSpacerItem].compactMap { $0 } : []
-    tabBar.items = spacerItems + appItems
+    let selectedColor = tabBar.tintColor ?? .label
+    let unselectedColor = tabBar.unselectedItemTintColor ?? .secondaryLabel
+    let mitsuriControllers = [spacerController].compactMap { $0 } + appControllers
+    let controllers = isMitsuri ? mitsuriControllers : appControllers
+    dockController.setViewControllers(controllers, animated: false)
+    tabBar.itemPositioning = isMitsuri ? .fill : .automatic
+    if #available(iOS 26.0, *) {
+      dockController.tabBarMinimizeBehavior = isMitsuri ? .never : .automatic
+    }
     if let selectedIndex = arguments["selectedIndex"] as? Int {
       select(index: selectedIndex)
     }
     chibiView.isHidden = !isMitsuri
     updateLayout(in: container.bounds)
 
-    if #available(iOS 26.0, *) {
-      // Keep UIKit's native Liquid Glass appearance.
-    } else {
-      let appearance = UITabBarAppearance()
-      appearance.configureWithDefaultBackground()
-      if isMitsuri {
+    if isMitsuri {
+      let appearance: UITabBarAppearance
+      if #available(iOS 26.0, *) {
+        // Keep the native Liquid Glass background and customize only item content.
+        appearance = tabBar.standardAppearance.copy() as! UITabBarAppearance
+      } else {
+        appearance = UITabBarAppearance()
+        appearance.configureWithDefaultBackground()
         appearance.backgroundEffect = UIBlurEffect(style: .systemChromeMaterial)
       }
+      configureItemAppearance(
+        appearance,
+        selectedColor: selectedColor,
+        unselectedColor: unselectedColor
+      )
       tabBar.standardAppearance = appearance
       tabBar.scrollEdgeAppearance = appearance
+    } else {
+      tabBar.standardAppearance = defaultStandardAppearance.copy() as! UITabBarAppearance
+      tabBar.scrollEdgeAppearance = defaultScrollEdgeAppearance?.copy() as? UITabBarAppearance
     }
+    attachDockController()
+    updateLayout(in: container.bounds)
   }
 
   private func updateLayout(in bounds: CGRect) {
     let topInset: CGFloat = isMitsuri ? 28 : 0
-    let measuredHeight = tabBar.sizeThatFits(
-      CGSize(width: bounds.width, height: CGFloat.greatestFiniteMagnitude)
-    ).height
-    let barHeight = max(68, measuredHeight)
-    tabBar.frame = CGRect(
+    dockController.view.frame = CGRect(
       x: 0,
       y: topInset,
       width: bounds.width,
-      height: barHeight
+      height: max(0, bounds.height - topInset)
     )
-    let characterWidth = isMitsuri ? min(62, bounds.width * 0.17) : 0
+    dockController.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    dockController.view.layoutIfNeeded()
     tabBar.layoutIfNeeded()
-    let spacerCenter = mitsuriSpacerCenterX()
+    let characterWidth = isMitsuri ? min(62, bounds.width * 0.17) : 0
+    let itemCount = CGFloat(tabBar.items?.count ?? 0)
+    let itemArea = tabBar.safeAreaLayoutGuide.layoutFrame
+    let capsuleInset = min(20, bounds.width * 0.05)
+    let itemWidth = max(0, itemArea.width - capsuleInset * 2)
+    let spacerCenter = itemCount > 0
+      ? itemArea.minX + capsuleInset + itemWidth / (itemCount * 2)
+      : tabBar.bounds.midX
+    let spacerCenterInDock = tabBar.convert(
+      CGPoint(x: spacerCenter, y: 0),
+      to: dockController.view
+    ).x
     chibiView.frame = CGRect(
-      x: isMitsuri ? (spacerCenter ?? bounds.midX) - characterWidth / 2 : 0,
-      y: 0,
+      x: isMitsuri ? spacerCenterInDock - characterWidth / 2 : 0,
+      y: isMitsuri ? -topInset : 0,
       width: characterWidth,
-      height: isMitsuri ? topInset + barHeight : 0
+      height: isMitsuri ? bounds.height : 0
     )
-  }
-
-  private func mitsuriSpacerCenterX() -> CGFloat? {
-    guard isMitsuri else { return nil }
-
-    var tabButtons: [UIView] = []
-    func collectTabButtons(from view: UIView) {
-      for subview in view.subviews {
-        if String(describing: type(of: subview)).contains("UITabBarButton") {
-          tabButtons.append(subview)
-        } else {
-          collectTabButtons(from: subview)
-        }
-      }
+    if chibiView.superview !== dockController.view {
+      chibiView.removeFromSuperview()
+      dockController.view.addSubview(chibiView)
+    } else {
+      dockController.view.bringSubviewToFront(chibiView)
     }
-    collectTabButtons(from: tabBar)
-
-    let spacerButton = tabButtons.sorted {
-      $0.convert($0.bounds, to: tabBar).minX < $1.convert($1.bounds, to: tabBar).minX
-    }.first
-
-    guard let spacerButton else { return nil }
-    let center = CGPoint(x: spacerButton.bounds.midX, y: spacerButton.bounds.midY)
-    return spacerButton.convert(center, to: container).x
   }
 
-  func tabBar(_ tabBar: UITabBar, shouldSelect item: UITabBarItem) -> Bool {
-    guard isMitsuri, let spacer = chibiSpacerItem, item === spacer else {
+  private func attachDockController() {
+    guard dockController.parent == nil,
+          let parent = containingViewController() else { return }
+    parent.addChild(dockController)
+    container.addSubview(dockController.view)
+    dockController.didMove(toParent: parent)
+    dockController.view.addSubview(chibiView)
+    updateLayout(in: container.bounds)
+  }
+
+  private func detachDockController() {
+    guard dockController.parent != nil else { return }
+    dockController.willMove(toParent: nil)
+    dockController.view.removeFromSuperview()
+    dockController.removeFromParent()
+  }
+
+  private func containingViewController() -> UIViewController? {
+    var responder: UIResponder? = container
+    while let current = responder {
+      if let controller = current as? UIViewController {
+        return controller
+      }
+      responder = current.next
+    }
+    return nil
+  }
+
+  private func configureItemAppearance(
+    _ appearance: UITabBarAppearance,
+    selectedColor: UIColor,
+    unselectedColor: UIColor
+  ) {
+    let layouts = [
+      appearance.stackedLayoutAppearance,
+      appearance.inlineLayoutAppearance,
+      appearance.compactInlineLayoutAppearance,
+    ]
+    let font = UIFont.systemFont(ofSize: 11, weight: .medium)
+    for layout in layouts {
+      layout.normal.iconColor = unselectedColor
+      layout.normal.titleTextAttributes = [
+        .foregroundColor: unselectedColor,
+        .font: font,
+      ]
+      layout.selected.iconColor = selectedColor
+      layout.selected.titleTextAttributes = [
+        .foregroundColor: selectedColor,
+        .font: font,
+      ]
+    }
+  }
+
+  func tabBarController(
+    _ tabBarController: UITabBarController,
+    shouldSelect viewController: UIViewController
+  ) -> Bool {
+    guard isMitsuri, let spacer = spacerController, viewController === spacer else {
       return true
     }
     return false
   }
 
-  func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
-    guard let nativeIndex = tabBar.items?.firstIndex(where: { $0 === item }) else { return }
-    let appIndex = nativeIndex - (isMitsuri ? 1 : 0)
-    guard appItems.indices.contains(appIndex) else { return }
+  func tabBarController(
+    _ tabBarController: UITabBarController,
+    didSelect viewController: UIViewController
+  ) {
+    guard !isApplyingSelection else { return }
+    guard let appIndex = appControllers.firstIndex(where: { $0 === viewController }) else {
+      return
+    }
     onSelect(appIndex)
   }
 }
