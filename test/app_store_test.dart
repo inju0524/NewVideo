@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zhuying/src/app_store.dart';
 import 'package:zhuying/src/models.dart';
 import 'package:zhuying/src/source_importer.dart';
+import 'package:zhuying/src/theme/app_theme.dart';
 
 void main() {
   setUp(() {
@@ -60,9 +61,17 @@ void main() {
       final restored = AppStore();
       await restored.initialize(refresh: false);
       expect(restored.themeId, 'mitsuri');
+      expect(
+        ZhuyingThemes.byId(restored.themeId).primary,
+        ZhuyingThemes.mitsuri.primary,
+      );
 
       await restored.setTheme('theme-that-does-not-exist');
       expect(restored.themeId, 'default');
+      expect(
+        ZhuyingThemes.byId(restored.themeId).primary,
+        ZhuyingThemes.defaultTheme.primary,
+      );
       expect(preferences.getString('zhuying.theme.v1'), 'default');
       restored.dispose();
     },

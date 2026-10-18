@@ -44,7 +44,7 @@ Windows 下额外关闭 Kotlin 增量编译，避免项目盘符与 Pub 缓存�
 
 之后手动运行 workflow 并选择 `adhoc`。生成的 `zhuying-ios-adhoc.ipa` 可安装到该 provisioning profile 已登记且未过期的设备；Ad Hoc 安装仍需通过 Apple Devices、Apple Configurator 或其他签名安装工具完成。TestFlight 分发需另行配置 App Store Connect 发布流程。
 
-iOS 底部导航由原生 UIKit `UITabBar` 承载。使用 iOS 26 SDK 时由系统应用 Liquid Glass 外观；较旧系统继续使用系统原生 Tab Bar 外观。导航内容和页面转场仍由 Flutter 管理。
+iOS 两种内置主题共用原生 UIKit `UITabBar`。iOS 26 由系统提供 Liquid Glass，较旧系统使用系统材质回退；蜜璃主题会在栏左侧叠加透明 Q 版立绘并为首页入口留出空间，默认主题不显示角色。页面路由和选中状态仍由 Flutter 管理。
 
 ## Web source proxy
 

@@ -56,8 +56,17 @@ private final class AppIconPlugin: NSObject, FlutterPlugin {
 private let dockViewType = "zhuying/native-glass-dock"
 private let dockChannelName = "zhuying/native-dock"
 
+private final class NativeDockContainerView: UIView {
+  var onLayout: ((CGRect) -> Void)?
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    onLayout?(bounds)
+  }
+}
+
 final class NativeGlassDockPlugin: NSObject, FlutterPlugin {
-  private var dockView: NativeGlassDockView?
+  private weak var dockView: NativeGlassDockView?
 
   static func register(with registrar: FlutterPluginRegistrar) {
     let instance = NativeGlassDockPlugin()
@@ -130,21 +139,27 @@ private final class NativeGlassDockFactory: NSObject, FlutterPlatformViewFactory
 }
 
 private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBarDelegate {
-  private let container: UIView
+  private let container: NativeDockContainerView
   private let tabBar: UITabBar
+  private let chibiView: UIImageView
   private let onSelect: (Int) -> Void
+  private var chibiSpacerItem: UITabBarItem?
+  private var appItems: [UITabBarItem] = []
+  private var isMitsuri = false
+  private var bottomInset: CGFloat
 
   init(
     frame: CGRect,
     arguments: [String: Any],
     onSelect: @escaping (Int) -> Void
   ) {
-    container = UIView(frame: frame)
+    container = NativeDockContainerView(frame: frame)
     tabBar = UITabBar(frame: CGRect(x: 0, y: 0, width: frame.width, height: 58))
     self.onSelect = onSelect
-    let bottomInset = CGFloat(
+    bottomInset = CGFloat(
       (arguments["bottomInset"] as? NSNumber)?.doubleValue ?? 0
     )
+    chibiView = UIImageView(image: UIImage(named: "MitsuriDockChibi"))
     super.init()
 
     container.backgroundColor = .clear
@@ -152,11 +167,14 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
     tabBar.delegate = self
     tabBar.overrideUserInterfaceStyle = .dark
     tabBar.autoresizingMask = [.flexibleWidth]
-    tabBar.tintColor = UIColor(red: 0.91, green: 0.69, blue: 0.35, alpha: 1)
-    tabBar.unselectedItemTintColor = .secondaryLabel
+    tabBar.isTranslucent = true
+    chibiView.contentMode = .scaleAspectFit
+    chibiView.isUserInteractionEnabled = false
+    chibiView.accessibilityElementsHidden = true
+    chibiView.autoresizingMask = [.flexibleTopMargin, .flexibleRightMargin]
     let sourceImage = UIImage(systemName: "point.3.connected.trianglepath.dotted")
       ?? UIImage(systemName: "network")
-    tabBar.items = [
+    appItems = [
       UITabBarItem(
         title: "首页",
         image: UIImage(systemName: "house"),
@@ -174,18 +192,19 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
         selectedImage: UIImage(systemName: "person.fill")
       ),
     ]
+    let spacerItem = UITabBarItem(title: "", image: nil, selectedImage: nil)
+    chibiSpacerItem = spacerItem
+    tabBar.items = [spacerItem] + appItems
     applyTheme(arguments: arguments)
     container.addSubview(tabBar)
-    if bottomInset > 0 {
-      let footer = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterial))
-      footer.frame = CGRect(x: 0, y: 58, width: frame.width, height: bottomInset)
-      footer.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
-      container.insertSubview(footer, belowSubview: tabBar)
+    container.addSubview(chibiView)
+    container.onLayout = { [weak self] bounds in
+      self?.updateLayout(in: bounds)
     }
+  }
 
-    if let selectedIndex = arguments["selectedIndex"] as? Int {
-      select(index: selectedIndex)
-    }
+  deinit {
+    tabBar.delegate = nil
   }
 
   func view() -> UIView {
@@ -194,21 +213,66 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
 
   func select(index: Int) {
     guard let items = tabBar.items, items.indices.contains(index) else { return }
-    tabBar.selectedItem = items[index]
+    let nativeIndex = index + (isMitsuri ? 1 : 0)
+    guard items.indices.contains(nativeIndex) else { return }
+    tabBar.selectedItem = items[nativeIndex]
   }
 
   func applyTheme(arguments: [String: Any]) {
-    if let primary = arguments["primary"] as? NSNumber {
-      tabBar.tintColor = UIColor(argb: primary.uint32Value)
+    isMitsuri = arguments["isMitsuri"] as? Bool ?? false
+    if let inset = arguments["bottomInset"] as? NSNumber {
+      bottomInset = CGFloat(inset.doubleValue)
     }
-    if let surface = arguments["surface"] as? NSNumber {
-      tabBar.backgroundColor = UIColor(argb: surface.uint32Value).withAlphaComponent(0.94)
+    let primaryValue = (arguments["primary"] as? NSNumber)?.uint32Value
+    let mutedValue = (arguments["muted"] as? NSNumber)?.uint32Value
+    tabBar.tintColor = primaryValue.map { UIColor(argb: $0) }
+      ?? UIColor(argb: 0xFFE9B66E)
+    tabBar.unselectedItemTintColor = mutedValue.map { UIColor(argb: $0) }
+      ?? .secondaryLabel
+    let spacerItems = isMitsuri ? [chibiSpacerItem].compactMap { $0 } : []
+    tabBar.items = spacerItems + appItems
+    if let selectedIndex = arguments["selectedIndex"] as? Int {
+      select(index: selectedIndex)
+    }
+    chibiView.isHidden = !isMitsuri
+    updateLayout(in: container.bounds)
+
+    if #available(iOS 26.0, *) {
+      // Keep UIKit's native Liquid Glass appearance.
+    } else {
+      let appearance = UITabBarAppearance()
+      appearance.configureWithDefaultBackground()
+      if isMitsuri {
+        appearance.backgroundEffect = UIBlurEffect(style: .systemChromeMaterial)
+      }
+      tabBar.standardAppearance = appearance
+      tabBar.scrollEdgeAppearance = appearance
     }
   }
 
+  private func updateLayout(in bounds: CGRect) {
+    let topInset: CGFloat = isMitsuri ? 28 : 0
+    let barHeight = max(58, bounds.height - bottomInset - topInset)
+    tabBar.frame = CGRect(
+      x: 0,
+      y: topInset,
+      width: bounds.width,
+      height: barHeight
+    )
+    chibiView.frame = CGRect(
+      x: 0,
+      y: 0,
+      width: isMitsuri ? min(62, bounds.width * 0.17) : 0,
+      height: isMitsuri ? topInset + barHeight : 0
+    )
+  }
+
   func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
-    guard let index = tabBar.items?.firstIndex(where: { $0 === item }) else { return }
-    onSelect(index)
+    guard let nativeIndex = tabBar.items?.firstIndex(where: { $0 === item }) else { return }
+    guard nativeIndex > 0 else { return }
+    let appIndex = nativeIndex - 1
+    guard appItems.indices.contains(appIndex) else { return }
+    onSelect(appIndex)
   }
 }
 

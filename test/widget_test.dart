@@ -172,6 +172,32 @@ void main() {
     await tester.pump();
   });
 
+  testWidgets('iOS uses the native dock for both built-in themes', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = AppStore()..sources = [];
+    await tester.pumpWidget(ZhuyingApp(store: store));
+    await tester.pump();
+    expect(find.byType(UiKitView), findsOneWidget);
+    expect(find.byType(NavigationDestination), findsNothing);
+
+    await store.setTheme('mitsuri');
+    await tester.pump();
+    expect(find.byType(UiKitView), findsOneWidget);
+    expect(find.byType(NavigationDestination), findsNothing);
+
+    await store.setTheme('default');
+    await tester.pump();
+    expect(find.byType(UiKitView), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
   testWidgets('media server form keeps the API token obscured', (tester) async {
     await tester.pumpWidget(
       MaterialApp(

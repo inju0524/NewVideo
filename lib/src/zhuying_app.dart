@@ -274,6 +274,7 @@ class _AppShellState extends State<AppShell>
         builder: (context, constraints) {
           final desktop = constraints.maxWidth >= 900;
           return Scaffold(
+            extendBody: !desktop && _isNativeIosDock,
             body: ZhuyingThemeBackdrop(
               reduceMotion: widget.store.reduceMotion,
               showCharacter:
@@ -328,18 +329,19 @@ class _AppShellState extends State<AppShell>
             ),
             bottomNavigationBar: desktop
                 ? null
-                : context.zhuyingTheme.isMitsuri
-                ? _MitsuriNavigationBar(
-                    selectedIndex: _selectedIndex,
-                    destinations: _destinations,
-                    onSelected: _select,
-                  )
                 : _isNativeIosDock
                 ? _NativeIosDock(
                     selectedIndex: _selectedIndex,
                     onSelected: _select,
                     channel: _nativeDockChannel,
-                    theme: context.zhuyingTheme,
+                    theme: ZhuyingThemes.byId(widget.store.themeId),
+                    bottomInset: MediaQuery.paddingOf(context).bottom,
+                  )
+                : context.zhuyingTheme.isMitsuri
+                ? _MitsuriNavigationBar(
+                    selectedIndex: _selectedIndex,
+                    destinations: _destinations,
+                    onSelected: _select,
                   )
                 : NavigationBar(
                     selectedIndex: _selectedIndex,
@@ -578,12 +580,14 @@ class _NativeIosDock extends StatefulWidget {
     required this.onSelected,
     required this.channel,
     required this.theme,
+    required this.bottomInset,
   });
 
   final int selectedIndex;
   final ValueChanged<int> onSelected;
   final MethodChannel channel;
   final ZhuyingThemeDefinition theme;
+  final double bottomInset;
 
   @override
   State<_NativeIosDock> createState() => _NativeIosDockState();
@@ -604,10 +608,9 @@ class _NativeIosDockState extends State<_NativeIosDock> {
       oldWidget.channel.setMethodCallHandler(null);
       widget.channel.setMethodCallHandler(_handleNativeSelection);
     }
-    if (oldWidget.selectedIndex != widget.selectedIndex) {
-      _selectNativeTab();
-    }
-    if (oldWidget.theme.id != widget.theme.id) {
+    if (oldWidget.selectedIndex != widget.selectedIndex ||
+        oldWidget.theme.id != widget.theme.id ||
+        oldWidget.bottomInset != widget.bottomInset) {
       unawaited(_applyNativeTheme());
     }
   }
@@ -618,21 +621,14 @@ class _NativeIosDockState extends State<_NativeIosDock> {
     }
   }
 
-  Future<void> _selectNativeTab() async {
-    try {
-      await widget.channel.invokeMethod<void>('select', widget.selectedIndex);
-    } on MissingPluginException {
-      // The platform view may not have been created yet.
-    } on PlatformException {
-      // Keep Flutter navigation responsive if the native bar is unavailable.
-    }
-  }
-
   Future<void> _applyNativeTheme() async {
     try {
       await widget.channel.invokeMethod<void>('theme', {
+        'isMitsuri': widget.theme.isMitsuri,
         'primary': widget.theme.primary.toARGB32(),
-        'surface': widget.theme.surface.toARGB32(),
+        'muted': widget.theme.muted.toARGB32(),
+        'selectedIndex': widget.selectedIndex,
+        'bottomInset': widget.bottomInset,
       });
     } on MissingPluginException {
       // The platform view may not have been created yet.
@@ -649,21 +645,21 @@ class _NativeIosDockState extends State<_NativeIosDock> {
 
   @override
   Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    final characterClearance = widget.theme.isMitsuri ? 28.0 : 0.0;
     return SizedBox(
-      height: 58 + bottomInset,
+      height: 58 + widget.bottomInset + characterClearance,
       child: UiKitView(
         viewType: 'zhuying/native-glass-dock',
         creationParams: {
           'selectedIndex': widget.selectedIndex,
-          'bottomInset': bottomInset,
+          'bottomInset': widget.bottomInset,
+          'isMitsuri': widget.theme.isMitsuri,
           'primary': widget.theme.primary.toARGB32(),
-          'surface': widget.theme.surface.toARGB32(),
+          'muted': widget.theme.muted.toARGB32(),
         },
         creationParamsCodec: const StandardMessageCodec(),
         onPlatformViewCreated: (_) async {
           await _applyNativeTheme();
-          await _selectNativeTab();
         },
       ),
     );
