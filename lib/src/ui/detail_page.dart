@@ -244,7 +244,9 @@ class _MediaDetailsPageState extends State<MediaDetailsPage> {
                                 child: Text(
                                   _item.description,
                                   style: TextStyle(
-                                    color: Color(0xFFD2D0C9),
+                                    color: context.zhuyingTheme.isLight
+                                        ? ZhuyingColors.text
+                                        : const Color(0xFFD2D0C9),
                                     fontSize: 13,
                                     height: 1.65,
                                   ),

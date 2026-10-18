@@ -73,7 +73,18 @@ void main() {
         ZhuyingThemes.defaultTheme.primary,
       );
       expect(preferences.getString('zhuying.theme.v1'), 'default');
+
+      await restored.setTheme('cinema-light');
+      expect(restored.themeId, 'cinema-light');
+      expect(ZhuyingThemes.byId(restored.themeId).isLight, isTrue);
+      expect(preferences.getString('zhuying.theme.v1'), 'cinema-light');
       restored.dispose();
+
+      final lightRestored = AppStore();
+      await lightRestored.initialize(refresh: false);
+      expect(lightRestored.themeId, 'cinema-light');
+      expect(ZhuyingThemes.byId(lightRestored.themeId).isLight, isTrue);
+      lightRestored.dispose();
     },
   );
 

@@ -21,6 +21,7 @@ class ZhuyingThemeDefinition {
     required this.secondary,
     required this.accent,
     required this.error,
+    this.brightness = Brightness.dark,
     this.characterAsset,
     this.characterBustAsset,
     this.chibiAsset,
@@ -49,6 +50,7 @@ class ZhuyingThemeDefinition {
   final Color secondary;
   final Color accent;
   final Color error;
+  final Brightness brightness;
   final String? characterAsset;
   final String? characterBustAsset;
   final String? chibiAsset;
@@ -64,12 +66,13 @@ class ZhuyingThemeDefinition {
   final double glowStrength;
 
   bool get isMitsuri => id == 'mitsuri';
+  bool get isLight => brightness == Brightness.light;
 
   ThemeData toThemeData() {
     final scheme =
         ColorScheme.fromSeed(
           seedColor: primary,
-          brightness: Brightness.dark,
+          brightness: brightness,
           surface: surface,
         ).copyWith(
           primary: primary,
@@ -84,21 +87,40 @@ class ZhuyingThemeDefinition {
           onError: _onColor(error),
           outline: line,
         );
-    final baseText = ThemeData.dark().textTheme.apply(
-      bodyColor: text,
-      displayColor: text,
-    );
+    final baseText = ThemeData(brightness: brightness).textTheme
+        .apply(bodyColor: text, displayColor: text);
     final radius = BorderRadius.circular(cornerRadius);
     final outline = OutlineInputBorder(
       borderRadius: radius,
       borderSide: BorderSide(color: line),
     );
     return ThemeData(
+      brightness: brightness,
       useMaterial3: true,
       colorScheme: scheme,
       scaffoldBackgroundColor: canvas,
       textTheme: baseText,
       dividerColor: line,
+      appBarTheme: AppBarTheme(
+        backgroundColor: canvas,
+        foregroundColor: text,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: surface,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: radius),
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: surface,
+        surfaceTintColor: Colors.transparent,
+        modalBackgroundColor: surface,
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: surface,
+        surfaceTintColor: Colors.transparent,
+      ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: surface.withValues(alpha: isMitsuri ? 0.82 : 1),
@@ -200,7 +222,29 @@ abstract final class ZhuyingThemes {
     glowStrength: 0.18,
   );
 
-  static const all = <ZhuyingThemeDefinition>[defaultTheme, mitsuri];
+  static const cinemaLight = ZhuyingThemeDefinition(
+    id: 'cinema-light',
+    name: '影院亮色',
+    description: '清透柔和的日间影院主题',
+    canvas: Color(0xFFF4F3EF),
+    surface: Color(0xFFFFFFFF),
+    surfaceRaised: Color(0xFFF9F8F5),
+    line: Color(0xFFE2E0D9),
+    text: Color(0xFF272720),
+    muted: Color(0xFF77766F),
+    primary: Color(0xFF93672F),
+    secondary: Color(0xFF587660),
+    accent: Color(0xFFB78B4D),
+    error: Color(0xFFB54E42),
+    brightness: Brightness.light,
+    cornerRadius: 7,
+  );
+
+  static const all = <ZhuyingThemeDefinition>[
+    defaultTheme,
+    mitsuri,
+    cinemaLight,
+  ];
 
   static ZhuyingThemeDefinition byId(String id) =>
       all.firstWhere((theme) => theme.id == id, orElse: () => defaultTheme);
@@ -275,6 +319,7 @@ class ZhuyingThemeExtension extends ThemeExtension<ZhuyingThemeExtension> {
       secondary: lerp(a.secondary, b.secondary),
       accent: lerp(a.accent, b.accent),
       error: lerp(a.error, b.error),
+      brightness: t < 0.5 ? a.brightness : b.brightness,
       characterAsset: t < 0.5 ? a.characterAsset : b.characterAsset,
       characterBustAsset: t < 0.5 ? a.characterBustAsset : b.characterBustAsset,
       chibiAsset: t < 0.5 ? a.chibiAsset : b.chibiAsset,

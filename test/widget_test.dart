@@ -824,6 +824,17 @@ void main() {
 
       final store = AppStore();
       final definition = ZhuyingThemes.defaultTheme;
+      final lightDefinition = ZhuyingThemes.cinemaLight;
+      expect(lightDefinition.toThemeData().brightness, Brightness.light);
+      expect(
+        lightDefinition.toThemeData().colorScheme.onSurface,
+        lightDefinition.text,
+      );
+      expect(
+        ZhuyingThemes.defaultTheme.toThemeData().brightness,
+        Brightness.dark,
+      );
+      expect(ZhuyingThemes.mitsuri.toThemeData().brightness, Brightness.dark);
       await tester.pumpWidget(
         MaterialApp(
           theme: definition.toThemeData().copyWith(
@@ -857,6 +868,13 @@ void main() {
       expect(mitsuriTile.borderRadius, BorderRadius.circular(8));
       expect(mitsuriTile.borderWidth, 1);
       expect(mitsuriTile.borderColor, ZhuyingThemes.mitsuri.line);
+
+      final lightTile = tester.widget<RoundedBorderFrame>(
+        find.byKey(const ValueKey('theme-option-cinema-light')),
+      );
+      expect(lightTile.borderRadius, BorderRadius.circular(8));
+      expect(lightTile.borderColor, lightDefinition.line);
+      expect(find.text('影院亮色'), findsOneWidget);
       store.dispose();
     },
   );

@@ -156,6 +156,7 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
   private var spacerController: UIViewController?
   private var appControllers: [UIViewController] = []
   private var isMitsuri = false
+  private var isLight = false
   private var isApplyingSelection = false
 
   init(
@@ -264,6 +265,7 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
 
   func applyTheme(arguments: [String: Any]) {
     isMitsuri = arguments["isMitsuri"] as? Bool ?? false
+    isLight = arguments["isLight"] as? Bool ?? false
     let primaryValue = (arguments["primary"] as? NSNumber)?.uint32Value
     let mutedValue = (arguments["muted"] as? NSNumber)?.uint32Value
     tabBar.tintColor = primaryValue.map { UIColor(argb: $0) }
@@ -272,6 +274,7 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
       ?? .secondaryLabel
     let selectedColor = tabBar.tintColor ?? .label
     let unselectedColor = tabBar.unselectedItemTintColor ?? .secondaryLabel
+    tabBar.overrideUserInterfaceStyle = isLight ? .light : .dark
     let mitsuriControllers = [spacerController].compactMap { $0 } + appControllers
     let controllers = isMitsuri ? mitsuriControllers : appControllers
     dockController.setViewControllers(controllers, animated: false)
@@ -285,7 +288,7 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
     chibiView.isHidden = !isMitsuri
     updateLayout(in: container.bounds)
 
-    if isMitsuri {
+    if isMitsuri || isLight {
       let appearance: UITabBarAppearance
       if #available(iOS 26.0, *) {
         // Keep the native Liquid Glass background and customize only item content.
@@ -293,7 +296,9 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
       } else {
         appearance = UITabBarAppearance()
         appearance.configureWithDefaultBackground()
-        appearance.backgroundEffect = UIBlurEffect(style: .systemChromeMaterial)
+        appearance.backgroundEffect = UIBlurEffect(
+          style: isLight ? .systemMaterial : .systemChromeMaterial
+        )
       }
       configureItemAppearance(
         appearance,

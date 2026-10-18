@@ -659,6 +659,7 @@ class _NativeIosDockState extends State<_NativeIosDock> {
     try {
       await widget.channel.invokeMethod<void>('theme', {
         'isMitsuri': widget.theme.isMitsuri,
+        'isLight': widget.theme.isLight,
         'primary': widget.theme.primary.toARGB32(),
         'muted': widget.theme.muted.toARGB32(),
         'selectedIndex': widget.selectedIndex,
@@ -689,6 +690,7 @@ class _NativeIosDockState extends State<_NativeIosDock> {
           creationParams: {
             'selectedIndex': widget.selectedIndex,
             'isMitsuri': widget.theme.isMitsuri,
+            'isLight': widget.theme.isLight,
             'primary': widget.theme.primary.toARGB32(),
             'muted': widget.theme.muted.toARGB32(),
           },
@@ -802,7 +804,9 @@ class _BrandMark extends StatelessWidget {
         borderRadius: radius,
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: theme.isMitsuri ? theme.surface : Colors.black,
+            color: theme.isMitsuri || theme.isLight
+                ? theme.surface
+                : Colors.black,
           ),
           child: Image.asset(
             key: ValueKey('brand-logo-${theme.id}'),
