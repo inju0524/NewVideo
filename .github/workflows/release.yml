@@ -251,11 +251,21 @@ jobs:
       - name: Generate checksums
         run: sha256sum release-assets/* > release-assets/SHA256SUMS.txt
 
-      - name: Publish GitHub Release
+      - name: Create or reuse GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release-assets/* \
-            --target "$GITHUB_SHA" \
-            --title "玄览 $GITHUB_REF_NAME" \
-            --notes "Android APK and iOS IPA built from commit $GITHUB_SHA. The iOS IPA is Ad Hoc installable when signing secrets are configured; otherwise it is unsigned and cannot be installed directly."
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; reusing it."
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --title "玄览 $GITHUB_REF_NAME" \
+              --notes "Android APK and iOS IPA built from commit $GITHUB_SHA. The iOS IPA is Ad Hoc installable when signing secrets are configured; otherwise it is unsigned and cannot be installed directly."
+          fi
+
+      - name: Upload release packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
