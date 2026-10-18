@@ -212,6 +212,41 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets(
+    'compact iOS default pages extend behind the native dock but iPad does not',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      FlutterSecureStorage.setMockInitialValues({});
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.viewPadding = const FakeViewPadding(bottom: 34);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final store = AppStore()..sources = [];
+      await tester.pumpWidget(ZhuyingApp(store: store));
+      await tester.pump();
+
+      var shell = tester.widget<Scaffold>(find.byType(Scaffold).first);
+      expect(shell.extendBody, isTrue);
+      var shellSafeArea = tester.widget<SafeArea>(find.byType(SafeArea).first);
+      expect(shellSafeArea.bottom, isFalse);
+      expect(find.byType(UiKitView), findsOneWidget);
+
+      tester.view.physicalSize = const Size(1024, 1366);
+      await tester.pump();
+      shell = tester.widget<Scaffold>(find.byType(Scaffold).first);
+      expect(shell.extendBody, isFalse);
+      shellSafeArea = tester.widget<SafeArea>(find.byType(SafeArea).first);
+      expect(shellSafeArea.bottom, isFalse);
+      expect(find.byType(UiKitView), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.iOS),
+  );
+
   testWidgets('page dock clearance is optional and theme scoped', (
     tester,
   ) async {
@@ -240,6 +275,41 @@ void main() {
       find.byType(SliverToBoxAdapter).last,
     );
     expect((defaultCategoryTail.child as SizedBox).height, 36);
+
+    await pumpPage(
+      CategoriesPage(store: store, onOpenItem: (_) {}, dockClearance: 112),
+      ZhuyingThemes.defaultTheme,
+    );
+    final defaultDockCategoryTail = tester.widget<SliverToBoxAdapter>(
+      find.byType(SliverToBoxAdapter).last,
+    );
+    expect((defaultDockCategoryTail.child as SizedBox).height, 148);
+
+    await pumpPage(
+      SourcesPage(store: store, dockClearance: 112),
+      ZhuyingThemes.defaultTheme,
+    );
+    expect(
+      tester
+          .widget<SingleChildScrollView>(
+            find.byType(SingleChildScrollView).first,
+          )
+          .padding,
+      const EdgeInsets.fromLTRB(28, 28, 28, 148),
+    );
+
+    await pumpPage(
+      MinePage(store: store, onOpenItem: (_) {}, dockClearance: 112),
+      ZhuyingThemes.defaultTheme,
+    );
+    expect(
+      tester
+          .widget<SingleChildScrollView>(
+            find.byType(SingleChildScrollView).first,
+          )
+          .padding,
+      const EdgeInsets.fromLTRB(22, 22, 22, 146),
+    );
 
     await pumpPage(
       CategoriesPage(store: store, onOpenItem: (_) {}, dockClearance: 112),

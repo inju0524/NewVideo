@@ -273,28 +273,32 @@ class _AppShellState extends State<AppShell>
       builder: (context, _) => LayoutBuilder(
         builder: (context, constraints) {
           final desktop = constraints.maxWidth >= 900;
+          final nativeDockVisible = _isNativeIosDock && !desktop;
           final immersiveMitsuri = context.zhuyingTheme.isMitsuri && !desktop;
           final nativeBottomInset = _isNativeIosDock
               ? MediaQuery.viewPaddingOf(context).bottom
               : 0.0;
+          final dockBottomInset = nativeDockVisible ? nativeBottomInset : 0.0;
           final safeBottomInset = MediaQuery.paddingOf(context).bottom;
-          final mitsuriDockClearance = immersiveMitsuri
+          final themedDockClearance = immersiveMitsuri
               ? 112.0 +
-                    (nativeBottomInset > safeBottomInset
-                        ? nativeBottomInset
+                    (dockBottomInset > safeBottomInset
+                        ? dockBottomInset
                         : safeBottomInset)
               : 0.0;
+          final dockClearance = nativeDockVisible
+              ? 112.0 + dockBottomInset
+              : themedDockClearance;
           return Scaffold(
-            extendBody: !desktop && (_isNativeIosDock || immersiveMitsuri),
+            extendBody: nativeDockVisible || immersiveMitsuri,
             body: ZhuyingThemeBackdrop(
               reduceMotion: widget.store.reduceMotion,
               showCharacter:
                   !(_selectedIndex == 0 && context.zhuyingTheme.isMitsuri),
               child: SafeArea(
-                bottom:
-                    !desktop &&
-                    !immersiveMitsuri &&
-                    (!_isNativeIosDock || _selectedIndex != 0),
+                bottom: !desktop &&
+                    !nativeDockVisible &&
+                    !immersiveMitsuri,
                 child: Row(
                   children: [
                     if (desktop)
@@ -332,7 +336,8 @@ class _AppShellState extends State<AppShell>
                                           index,
                                           eased,
                                           nativeBottomInset: nativeBottomInset,
-                                          dockClearance: mitsuriDockClearance,
+                                          dockClearance: dockClearance,
+                                          nativeDockVisible: nativeDockVisible,
                                         ),
                                   ],
                                 );
@@ -354,7 +359,7 @@ class _AppShellState extends State<AppShell>
                     onSelected: _select,
                     channel: _nativeDockChannel,
                     theme: ZhuyingThemes.byId(widget.store.themeId),
-                    bottomInset: nativeBottomInset,
+                    bottomInset: dockBottomInset,
                   )
                 : context.zhuyingTheme.isMitsuri
                 ? _MitsuriNavigationBar(
@@ -384,6 +389,7 @@ class _AppShellState extends State<AppShell>
     double transitionValue, {
     required double nativeBottomInset,
     required double dockClearance,
+    required bool nativeDockVisible,
   }) {
     final selected = index == _selectedIndex;
     final transitioningOut =
@@ -414,9 +420,8 @@ class _AppShellState extends State<AppShell>
         dockClearance: dockClearance,
       ),
     };
-    // Keep themed pages on one continuous scene beneath their translucent dock.
-    final nativeIosHome = _isNativeIosDock && index == 0;
-    final pageSurface = context.zhuyingTheme.isMitsuri || nativeIosHome
+    // Keep pages transparent only when they sit beneath a translucent dock.
+    final pageSurface = context.zhuyingTheme.isMitsuri || nativeDockVisible
         ? page
         : ColoredBox(color: ZhuyingColors.canvas, child: page);
     return Offstage(
