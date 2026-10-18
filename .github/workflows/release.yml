@@ -241,6 +241,9 @@ jobs:
     needs: [android, ios]
     runs-on: ubuntu-24.04
     steps:
+      - name: Check out release commit
+        uses: actions/checkout@v4
+
       - name: Download mobile packages
         uses: actions/download-artifact@v4
         with:
