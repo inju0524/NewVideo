@@ -42,11 +42,13 @@ class CategoriesPage extends StatefulWidget {
   const CategoriesPage({
     required this.store,
     required this.onOpenItem,
+    this.dockClearance = 0,
     super.key,
   });
 
   final AppStore store;
   final ValueChanged<MediaItem> onOpenItem;
+  final double dockClearance;
 
   @override
   State<CategoriesPage> createState() => _CategoriesPageState();
@@ -466,7 +468,9 @@ class _CategoriesPageState extends State<CategoriesPage> {
                 ),
               ),
             ),
-          const SliverToBoxAdapter(child: SizedBox(height: 36)),
+          SliverToBoxAdapter(
+            child: SizedBox(height: 36 + widget.dockClearance),
+          ),
         ],
       ),
     );
@@ -1367,10 +1371,16 @@ class _HistoryContent extends StatelessWidget {
 enum _MineSection { history, favorites, settings }
 
 class MinePage extends StatefulWidget {
-  const MinePage({required this.store, required this.onOpenItem, super.key});
+  const MinePage({
+    required this.store,
+    required this.onOpenItem,
+    this.dockClearance = 0,
+    super.key,
+  });
 
   final AppStore store;
   final ValueChanged<MediaItem> onOpenItem;
+  final double dockClearance;
 
   @override
   State<MinePage> createState() => _MinePageState();
@@ -1386,7 +1396,7 @@ class _MinePageState extends State<MinePage> {
         .where((item) => store.favorites.contains(item.id))
         .toList();
     return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(22, 22, 22, 34),
+      padding: EdgeInsets.fromLTRB(22, 22, 22, 34 + widget.dockClearance),
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 920),
@@ -1494,9 +1504,10 @@ class _FavoritesContent extends StatelessWidget {
 }
 
 class SourcesPage extends StatefulWidget {
-  const SourcesPage({required this.store, super.key});
+  const SourcesPage({required this.store, this.dockClearance = 0, super.key});
 
   final AppStore store;
+  final double dockClearance;
 
   @override
   State<SourcesPage> createState() => _SourcesPageState();
@@ -1660,7 +1671,7 @@ class _SourcesPageState extends State<SourcesPage> {
         .where((source) => source.health == SourceHealth.available)
         .length;
     return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(28, 28, 28, 36),
+      padding: EdgeInsets.fromLTRB(28, 28, 28, 36 + widget.dockClearance),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

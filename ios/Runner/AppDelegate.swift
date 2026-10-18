@@ -256,10 +256,13 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
       width: bounds.width,
       height: barHeight
     )
+    let characterWidth = isMitsuri ? min(62, bounds.width * 0.17) : 0
+    let itemCount = max(1, tabBar.items?.count ?? 1)
+    let spacerCenter = bounds.width / CGFloat(itemCount) / 2
     chibiView.frame = CGRect(
-      x: 0,
+      x: isMitsuri ? spacerCenter - characterWidth / 2 : 0,
       y: 0,
-      width: isMitsuri ? min(62, bounds.width * 0.17) : 0,
+      width: characterWidth,
       height: isMitsuri ? topInset + barHeight : 0
     )
   }

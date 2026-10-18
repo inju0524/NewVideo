@@ -273,17 +273,28 @@ class _AppShellState extends State<AppShell>
       builder: (context, _) => LayoutBuilder(
         builder: (context, constraints) {
           final desktop = constraints.maxWidth >= 900;
+          final immersiveMitsuri = context.zhuyingTheme.isMitsuri && !desktop;
           final nativeBottomInset = _isNativeIosDock
               ? MediaQuery.viewPaddingOf(context).bottom
               : 0.0;
+          final safeBottomInset = MediaQuery.paddingOf(context).bottom;
+          final mitsuriDockClearance = immersiveMitsuri
+              ? 112.0 +
+                    (nativeBottomInset > safeBottomInset
+                        ? nativeBottomInset
+                        : safeBottomInset)
+              : 0.0;
           return Scaffold(
-            extendBody: !desktop && _isNativeIosDock,
+            extendBody: !desktop && (_isNativeIosDock || immersiveMitsuri),
             body: ZhuyingThemeBackdrop(
               reduceMotion: widget.store.reduceMotion,
               showCharacter:
                   !(_selectedIndex == 0 && context.zhuyingTheme.isMitsuri),
               child: SafeArea(
-                bottom: !desktop && (!_isNativeIosDock || _selectedIndex != 0),
+                bottom:
+                    !desktop &&
+                    !immersiveMitsuri &&
+                    (!_isNativeIosDock || _selectedIndex != 0),
                 child: Row(
                   children: [
                     if (desktop)
@@ -321,6 +332,7 @@ class _AppShellState extends State<AppShell>
                                           index,
                                           eased,
                                           nativeBottomInset: nativeBottomInset,
+                                          dockClearance: mitsuriDockClearance,
                                         ),
                                   ],
                                 );
@@ -371,6 +383,7 @@ class _AppShellState extends State<AppShell>
     int index,
     double transitionValue, {
     required double nativeBottomInset,
+    required double dockClearance,
   }) {
     final selected = index == _selectedIndex;
     final transitioningOut =
@@ -389,14 +402,19 @@ class _AppShellState extends State<AppShell>
         onSearch: (value) => _openSearch(value, true),
         nativeBottomInset: nativeBottomInset,
       ),
-      1 => CategoriesPage(store: widget.store, onOpenItem: _openItem),
-      2 => SourcesPage(store: widget.store),
-      _ => MinePage(store: widget.store, onOpenItem: _openItem),
+      1 => CategoriesPage(
+        store: widget.store,
+        onOpenItem: _openItem,
+        dockClearance: dockClearance,
+      ),
+      2 => SourcesPage(store: widget.store, dockClearance: dockClearance),
+      _ => MinePage(
+        store: widget.store,
+        onOpenItem: _openItem,
+        dockClearance: dockClearance,
+      ),
     };
-    // Keep the immersive Mitsuri home transparent so its scene can continue
-    // behind the content; other pages retain an opaque surface during fades.
-    // Keep themed pages atmospheric and let the iOS home reveal content behind
-    // its native glass dock; other default-theme pages keep opaque surfaces.
+    // Keep themed pages on one continuous scene beneath their translucent dock.
     final nativeIosHome = _isNativeIosDock && index == 0;
     final pageSurface = context.zhuyingTheme.isMitsuri || nativeIosHome
         ? page
@@ -468,25 +486,29 @@ class _MitsuriNavigationBar extends StatelessWidget {
                   child: BackdropFilter(
                     filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
                     child: DecoratedBox(
-                      decoration: const BoxDecoration(color: Color(0xCC160F18)),
-                      child: Padding(
-                        padding: const EdgeInsets.only(left: 44),
-                        child: Row(
-                          children: [
-                            for (
-                              var index = 0;
-                              index < destinations.length;
-                              index++
-                            )
-                              Expanded(
-                                child: _MitsuriDockItem(
-                                  destination: destinations[index],
-                                  selected: selectedIndex == index,
-                                  onTap: () => onSelected(index),
-                                ),
+                      decoration: const BoxDecoration(color: Color(0x8A160F18)),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox.expand(
+                              key: const ValueKey(
+                                'mitsuri-dock-leading-spacer',
                               ),
-                          ],
-                        ),
+                            ),
+                          ),
+                          for (
+                            var index = 0;
+                            index < destinations.length;
+                            index++
+                          )
+                            Expanded(
+                              child: _MitsuriDockItem(
+                                destination: destinations[index],
+                                selected: selectedIndex == index,
+                                onTap: () => onSelected(index),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                   ),
@@ -494,12 +516,13 @@ class _MitsuriNavigationBar extends StatelessWidget {
               ),
             ),
             Positioned(
-              left: -8,
+              left: (MediaQuery.sizeOf(context).width - 20) / 10 - 48,
               bottom: -10,
               width: 96,
               height: 102,
               child: _MitsuriDockCharacter(
                 asset: context.zhuyingTheme.chibiAsset,
+                key: const ValueKey('mitsuri-dock-character'),
               ),
             ),
           ],
@@ -510,7 +533,7 @@ class _MitsuriNavigationBar extends StatelessWidget {
 }
 
 class _MitsuriDockCharacter extends StatelessWidget {
-  const _MitsuriDockCharacter({required this.asset});
+  const _MitsuriDockCharacter({required this.asset, super.key});
 
   final String? asset;
 

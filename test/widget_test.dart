@@ -172,6 +172,139 @@ void main() {
     await tester.pump();
   });
 
+  testWidgets('Mitsuri compact shell extends themed pages behind the dock', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({'zhuying.theme.v1': 'mitsuri'});
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = AppStore()..sources = [];
+    await tester.pumpWidget(ZhuyingApp(store: store));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 450));
+
+    final shell = tester.widget<Scaffold>(find.byType(Scaffold).first);
+    expect(shell.extendBody, isTrue);
+    final shellSafeArea = tester.widget<SafeArea>(find.byType(SafeArea).first);
+    expect(shellSafeArea.bottom, isFalse);
+
+    await tester.tap(find.text('分类'));
+    await tester.pump(const Duration(milliseconds: 300));
+    final categoryTail = tester.widget<SliverToBoxAdapter>(
+      find.byType(SliverToBoxAdapter).last,
+    );
+    expect((categoryTail.child as SizedBox).height, 148);
+
+    await store.setTheme('default');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 450));
+    final defaultShell = tester.widget<Scaffold>(find.byType(Scaffold).first);
+    expect(defaultShell.extendBody, isFalse);
+    final defaultSafeArea = tester.widget<SafeArea>(
+      find.byType(SafeArea).first,
+    );
+    expect(defaultSafeArea.bottom, isTrue);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('page dock clearance is optional and theme scoped', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = AppStore()..sources = [];
+    Future<void> pumpPage(Widget page, ZhuyingThemeDefinition theme) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: theme.toThemeData().copyWith(
+            extensions: [ZhuyingThemeExtension(theme)],
+          ),
+          home: Scaffold(body: page),
+        ),
+      );
+    }
+
+    await pumpPage(
+      CategoriesPage(store: store, onOpenItem: (_) {}),
+      ZhuyingThemes.defaultTheme,
+    );
+    final defaultCategoryTail = tester.widget<SliverToBoxAdapter>(
+      find.byType(SliverToBoxAdapter).last,
+    );
+    expect((defaultCategoryTail.child as SizedBox).height, 36);
+
+    await pumpPage(
+      CategoriesPage(store: store, onOpenItem: (_) {}, dockClearance: 112),
+      ZhuyingThemes.mitsuri,
+    );
+    final mitsuriCategoryTail = tester.widget<SliverToBoxAdapter>(
+      find.byType(SliverToBoxAdapter).last,
+    );
+    expect((mitsuriCategoryTail.child as SizedBox).height, 148);
+
+    await pumpPage(
+      SourcesPage(store: store, dockClearance: 112),
+      ZhuyingThemes.mitsuri,
+    );
+    expect(
+      tester
+          .widget<SingleChildScrollView>(
+            find.byType(SingleChildScrollView).first,
+          )
+          .padding,
+      const EdgeInsets.fromLTRB(28, 28, 28, 148),
+    );
+
+    await pumpPage(
+      MinePage(store: store, onOpenItem: (_) {}, dockClearance: 112),
+      ZhuyingThemes.mitsuri,
+    );
+    expect(
+      tester
+          .widget<SingleChildScrollView>(
+            find.byType(SingleChildScrollView).first,
+          )
+          .padding,
+      const EdgeInsets.fromLTRB(22, 22, 22, 146),
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    store.dispose();
+  });
+
+  testWidgets('Mitsuri dock character is centered over its disabled slot', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({'zhuying.theme.v1': 'mitsuri'});
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = AppStore()..sources = [];
+    await tester.pumpWidget(ZhuyingApp(store: store));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 450));
+
+    final spacer = tester.getRect(
+      find.byKey(const ValueKey('mitsuri-dock-leading-spacer')),
+    );
+    final character = tester.getRect(
+      find.byKey(const ValueKey('mitsuri-dock-character')),
+    );
+    expect(character.center.dx, closeTo(spacer.center.dx, 0.5));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
   testWidgets('iOS home scroll tails clear the native dock in both themes', (
     tester,
   ) async {
