@@ -22,6 +22,7 @@ class MainActivity : FlutterActivity() {
                     return@setMethodCallHandler
                 }
 
+                val active = if (useMitsuri) "MitsuriLauncher" else "XuanlanLauncher"
                 val inactive = if (useMitsuri) "XuanlanLauncher" else "MitsuriLauncher"
                 setTitle(if (useMitsuri) "我爱看电视" else "玄览")
                 val manager = packageManager
