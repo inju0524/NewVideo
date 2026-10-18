@@ -183,28 +183,40 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
     chibiView.isUserInteractionEnabled = false
     chibiView.accessibilityElementsHidden = true
     chibiView.autoresizingMask = [.flexibleTopMargin, .flexibleRightMargin]
-    let sourceImage = UIImage(systemName: "point.3.connected.trianglepath.dotted")
-      ?? UIImage(systemName: "network")
+    let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 19, weight: .regular)
+    let sourceImage = UIImage(systemName: "point.3.connected.trianglepath.dotted", withConfiguration: symbolConfiguration)
+      ?? UIImage(systemName: "network", withConfiguration: symbolConfiguration)
     appItems = [
       UITabBarItem(
         title: "首页",
-        image: UIImage(systemName: "house"),
-        selectedImage: UIImage(systemName: "house.fill")
+        image: UIImage(systemName: "house", withConfiguration: symbolConfiguration)?
+          .withRenderingMode(.alwaysTemplate),
+        selectedImage: UIImage(systemName: "house.fill", withConfiguration: symbolConfiguration)?
+          .withRenderingMode(.alwaysTemplate)
       ),
       UITabBarItem(
         title: "分类",
-        image: UIImage(systemName: "square.grid.2x2"),
-        selectedImage: UIImage(systemName: "square.grid.2x2.fill")
+        image: UIImage(systemName: "square.grid.2x2", withConfiguration: symbolConfiguration)?
+          .withRenderingMode(.alwaysTemplate),
+        selectedImage: UIImage(systemName: "square.grid.2x2.fill", withConfiguration: symbolConfiguration)?
+          .withRenderingMode(.alwaysTemplate)
       ),
-      UITabBarItem(title: "片源", image: sourceImage, selectedImage: sourceImage),
+      UITabBarItem(
+        title: "片源",
+        image: sourceImage?.withRenderingMode(.alwaysTemplate),
+        selectedImage: sourceImage?.withRenderingMode(.alwaysTemplate)
+      ),
       UITabBarItem(
         title: "我的",
-        image: UIImage(systemName: "person"),
-        selectedImage: UIImage(systemName: "person.fill")
+        image: UIImage(systemName: "person", withConfiguration: symbolConfiguration)?
+          .withRenderingMode(.alwaysTemplate),
+        selectedImage: UIImage(systemName: "person.fill", withConfiguration: symbolConfiguration)?
+          .withRenderingMode(.alwaysTemplate)
       ),
     ]
-    let spacerItem = UITabBarItem(title: "", image: nil, selectedImage: nil)
+    let spacerItem = UITabBarItem(title: " ", image: nil, selectedImage: nil)
     spacerItem.isEnabled = false
+    spacerItem.accessibilityLabel = ""
     let spacer = UIViewController()
     spacer.tabBarItem = spacerItem
     spacer.view.backgroundColor = .clear
@@ -299,39 +311,69 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
   }
 
   private func updateLayout(in bounds: CGRect) {
-    let topInset: CGFloat = isMitsuri ? 28 : 0
     dockController.view.frame = CGRect(
       x: 0,
-      y: topInset,
+      y: 0,
       width: bounds.width,
-      height: max(0, bounds.height - topInset)
+      height: bounds.height
     )
     dockController.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     dockController.view.layoutIfNeeded()
+    tabBar.setNeedsLayout()
     tabBar.layoutIfNeeded()
-    let characterWidth = isMitsuri ? min(62, bounds.width * 0.17) : 0
-    let itemCount = CGFloat(tabBar.items?.count ?? 0)
-    let itemArea = tabBar.safeAreaLayoutGuide.layoutFrame
-    let capsuleInset = min(20, bounds.width * 0.05)
-    let itemWidth = max(0, itemArea.width - capsuleInset * 2)
-    let spacerCenter = itemCount > 0
-      ? itemArea.minX + capsuleInset + itemWidth / (itemCount * 2)
-      : tabBar.bounds.midX
-    let spacerCenterInDock = tabBar.convert(
-      CGPoint(x: spacerCenter, y: 0),
-      to: dockController.view
-    ).x
+    let characterSize = characterFrame(in: bounds)
     chibiView.frame = CGRect(
-      x: isMitsuri ? spacerCenterInDock - characterWidth / 2 : 0,
-      y: isMitsuri ? -topInset : 0,
-      width: characterWidth,
-      height: isMitsuri ? bounds.height : 0
+      x: characterSize.minX,
+      y: characterSize.minY,
+      width: characterSize.width,
+      height: characterSize.height
     )
     if chibiView.superview !== dockController.view {
       chibiView.removeFromSuperview()
       dockController.view.addSubview(chibiView)
     } else {
       dockController.view.bringSubviewToFront(chibiView)
+    }
+  }
+
+  private func characterFrame(in bounds: CGRect) -> CGRect {
+    guard isMitsuri else { return .zero }
+
+    let characterHeight = min(104, bounds.height)
+    let imageAspectRatio = chibiView.image.map { $0.size.width / max($0.size.height, 1) } ?? 0.75
+    let characterWidth = min(72, characterHeight * imageAspectRatio)
+    let spacerButton = tabBarButtons(in: tabBar).first
+    let itemCount = CGFloat(max(tabBar.items?.count ?? 5, 1))
+    let itemArea = tabBar.safeAreaLayoutGuide.layoutFrame
+    let estimatedCapsuleWidth = min(
+      itemArea.width,
+      max(320, itemCount * 72)
+    )
+    let fallbackCenterX = itemArea.midX - estimatedCapsuleWidth * (itemCount - 1) / (2 * itemCount)
+    let spacerCenterX = spacerButton.map { button in
+      button.convert(CGPoint(x: button.bounds.midX, y: button.bounds.midY), to: dockController.view).x
+    } ?? tabBar.convert(CGPoint(x: fallbackCenterX, y: tabBar.bounds.midY), to: dockController.view).x
+    let barBottom = tabBar.convert(CGPoint(x: 0, y: tabBar.bounds.maxY), to: dockController.view).y
+    let characterY = max(0, barBottom - characterHeight)
+    return CGRect(
+      x: spacerCenterX - characterWidth / 2,
+      y: characterY,
+      width: characterWidth,
+      height: characterHeight
+    )
+  }
+
+  private func tabBarButtons(in view: UIView) -> [UIView] {
+    var buttons: [UIView] = []
+    for subview in view.subviews {
+      if String(describing: type(of: subview)).contains("UITabBarButton") {
+        buttons.append(subview)
+      } else {
+        buttons.append(contentsOf: tabBarButtons(in: subview))
+      }
+    }
+    return buttons.sorted {
+      $0.convert($0.bounds, to: tabBar).minX < $1.convert($1.bounds, to: tabBar).minX
     }
   }
 
@@ -368,6 +410,9 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
     selectedColor: UIColor,
     unselectedColor: UIColor
   ) {
+    appearance.stackedItemPositioning = .centered
+    appearance.stackedItemWidth = 0
+    appearance.stackedItemSpacing = 8
     let layouts = [
       appearance.stackedLayoutAppearance,
       appearance.inlineLayoutAppearance,

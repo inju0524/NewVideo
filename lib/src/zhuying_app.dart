@@ -678,8 +678,8 @@ class _NativeIosDockState extends State<_NativeIosDock> {
 
   @override
   Widget build(BuildContext context) {
-    final characterClearance = widget.theme.isMitsuri ? 28.0 : 0.0;
-    const dockHeight = 68.0;
+    final characterClearance = widget.theme.isMitsuri ? 44.0 : 0.0;
+    const dockHeight = 84.0;
     return Padding(
       padding: EdgeInsets.only(bottom: widget.bottomInset),
       child: SizedBox(
