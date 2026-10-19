@@ -901,6 +901,18 @@ void main() {
         lightDefinition.text,
       );
       expect(
+        HSLColor.fromColor(lightDefinition.primary).saturation,
+        greaterThan(HSLColor.fromColor(const Color(0xFF93672F)).saturation),
+      );
+      expect(
+        lightDefinition.accent.computeLuminance(),
+        greaterThan(const Color(0xFFB78B4D).computeLuminance()),
+      );
+      final lightGoldContrast =
+          (lightDefinition.canvas.computeLuminance() + 0.05) /
+          (lightDefinition.primary.computeLuminance() + 0.05);
+      expect(lightGoldContrast, greaterThanOrEqualTo(4.5));
+      expect(
         ZhuyingThemes.defaultTheme.toThemeData().brightness,
         Brightness.dark,
       );

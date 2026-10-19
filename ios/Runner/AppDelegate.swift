@@ -274,7 +274,9 @@ private final class NativeGlassDockView: NSObject, FlutterPlatformView, UITabBar
       ?? .secondaryLabel
     let selectedColor = tabBar.tintColor ?? .label
     let unselectedColor = tabBar.unselectedItemTintColor ?? .secondaryLabel
-    tabBar.overrideUserInterfaceStyle = isLight ? .light : .dark
+    let interfaceStyle: UIUserInterfaceStyle = isLight ? .light : .dark
+    dockController.overrideUserInterfaceStyle = interfaceStyle
+    tabBar.overrideUserInterfaceStyle = interfaceStyle
     let mitsuriControllers = [spacerController].compactMap { $0 } + appControllers
     let controllers = isMitsuri ? mitsuriControllers : appControllers
     dockController.setViewControllers(controllers, animated: false)
