@@ -20,6 +20,8 @@ class ZhuyingThemeDefinition {
     required this.primary,
     required this.secondary,
     required this.accent,
+    required this.action,
+    required this.onAction,
     required this.error,
     this.brightness = Brightness.dark,
     this.characterAsset,
@@ -49,6 +51,8 @@ class ZhuyingThemeDefinition {
   final Color primary;
   final Color secondary;
   final Color accent;
+  final Color action;
+  final Color onAction;
   final Color error;
   final Brightness brightness;
   final String? characterAsset;
@@ -190,6 +194,8 @@ abstract final class ZhuyingThemes {
     primary: Color(0xFFE9B66E),
     secondary: Color(0xFF9BB7A0),
     accent: Color(0xFFE9B66E),
+    action: Color(0xFFE9B66E),
+    onAction: Color(0xFF211A10),
     error: Color(0xFFD88570),
   );
 
@@ -206,6 +212,8 @@ abstract final class ZhuyingThemes {
     primary: Color(0xFFFF86B4),
     secondary: Color(0xFFC9E978),
     accent: Color(0xFFFFC2D8),
+    action: Color(0xFFFF86B4),
+    onAction: Colors.white,
     error: Color(0xFFFF9B9B),
     characterAsset: 'assets/themes/mitsuri/character.png',
     characterBustAsset: 'assets/themes/mitsuri/character-hero-cropped.png',
@@ -232,9 +240,11 @@ abstract final class ZhuyingThemes {
     line: Color(0xFFE2E0D9),
     text: Color(0xFF272720),
     muted: Color(0xFF77766F),
-    primary: Color(0xFF9E6000),
+    primary: Color(0xFFA65300),
     secondary: Color(0xFF587660),
-    accent: Color(0xFFE0A82F),
+    accent: Color(0xFFB45100),
+    action: Color(0xFFF6BC42),
+    onAction: Color(0xFF30230D),
     error: Color(0xFFB54E42),
     brightness: Brightness.light,
     cornerRadius: 7,
@@ -318,6 +328,8 @@ class ZhuyingThemeExtension extends ThemeExtension<ZhuyingThemeExtension> {
       primary: lerp(a.primary, b.primary),
       secondary: lerp(a.secondary, b.secondary),
       accent: lerp(a.accent, b.accent),
+      action: lerp(a.action, b.action),
+      onAction: lerp(a.onAction, b.onAction),
       error: lerp(a.error, b.error),
       brightness: t < 0.5 ? a.brightness : b.brightness,
       characterAsset: t < 0.5 ? a.characterAsset : b.characterAsset,

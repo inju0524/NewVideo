@@ -232,6 +232,16 @@ void main() {
       var shellSafeArea = tester.widget<SafeArea>(find.byType(SafeArea).first);
       expect(shellSafeArea.bottom, isFalse);
       expect(find.byType(UiKitView), findsOneWidget);
+      final dockBounds = tester.getRect(find.byType(UiKitView));
+      expect(dockBounds.bottom, closeTo(844, 0.1));
+      expect(dockBounds.height, closeTo(84, 0.1));
+
+      tester.view.physicalSize = const Size(844, 390);
+      tester.view.viewPadding = const FakeViewPadding(bottom: 21);
+      await tester.pump();
+      final landscapeDockBounds = tester.getRect(find.byType(UiKitView));
+      expect(landscapeDockBounds.bottom, closeTo(390, 0.1));
+      expect(landscapeDockBounds.height, closeTo(84, 0.1));
 
       tester.view.physicalSize = const Size(1024, 1366);
       await tester.pump();
@@ -905,13 +915,28 @@ void main() {
         greaterThan(HSLColor.fromColor(const Color(0xFF93672F)).saturation),
       );
       expect(
-        lightDefinition.accent.computeLuminance(),
-        greaterThan(const Color(0xFFB78B4D).computeLuminance()),
+        lightDefinition.action.computeLuminance(),
+        greaterThan(lightDefinition.accent.computeLuminance()),
       );
-      final lightGoldContrast =
+      final lightEmphasisContrast =
           (lightDefinition.canvas.computeLuminance() + 0.05) /
           (lightDefinition.primary.computeLuminance() + 0.05);
-      expect(lightGoldContrast, greaterThanOrEqualTo(4.5));
+      final lightActionContrast =
+          (lightDefinition.action.computeLuminance() + 0.05) /
+          (lightDefinition.onAction.computeLuminance() + 0.05);
+      expect(lightEmphasisContrast, greaterThanOrEqualTo(4.5));
+      expect(lightActionContrast, greaterThanOrEqualTo(4.5));
+      expect(
+        lightDefinition.accent.computeLuminance(),
+        greaterThan(lightDefinition.primary.computeLuminance()),
+      );
+      expect(
+        ZhuyingThemes.defaultTheme.action,
+        ZhuyingThemes.defaultTheme.primary,
+      );
+      expect(ZhuyingThemes.defaultTheme.onAction, const Color(0xFF211A10));
+      expect(ZhuyingThemes.mitsuri.action, ZhuyingThemes.mitsuri.primary);
+      expect(ZhuyingThemes.mitsuri.onAction, Colors.white);
       expect(
         ZhuyingThemes.defaultTheme.toThemeData().brightness,
         Brightness.dark,

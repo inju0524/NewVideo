@@ -296,9 +296,7 @@ class _AppShellState extends State<AppShell>
               showCharacter:
                   !(_selectedIndex == 0 && context.zhuyingTheme.isMitsuri),
               child: SafeArea(
-                bottom: !desktop &&
-                    !nativeDockVisible &&
-                    !immersiveMitsuri,
+                bottom: !desktop && !nativeDockVisible && !immersiveMitsuri,
                 child: Row(
                   children: [
                     if (desktop)
@@ -359,7 +357,6 @@ class _AppShellState extends State<AppShell>
                     onSelected: _select,
                     channel: _nativeDockChannel,
                     theme: ZhuyingThemes.byId(widget.store.themeId),
-                    bottomInset: dockBottomInset,
                   )
                 : context.zhuyingTheme.isMitsuri
                 ? _MitsuriNavigationBar(
@@ -620,14 +617,12 @@ class _NativeIosDock extends StatefulWidget {
     required this.onSelected,
     required this.channel,
     required this.theme,
-    required this.bottomInset,
   });
 
   final int selectedIndex;
   final ValueChanged<int> onSelected;
   final MethodChannel channel;
   final ZhuyingThemeDefinition theme;
-  final double bottomInset;
 
   @override
   State<_NativeIosDock> createState() => _NativeIosDockState();
@@ -686,24 +681,21 @@ class _NativeIosDockState extends State<_NativeIosDock> {
   Widget build(BuildContext context) {
     final characterClearance = widget.theme.isMitsuri ? 44.0 : 0.0;
     const dockHeight = 84.0;
-    return Padding(
-      padding: EdgeInsets.only(bottom: widget.bottomInset),
-      child: SizedBox(
-        height: dockHeight + characterClearance,
-        child: UiKitView(
-          viewType: 'zhuying/native-glass-dock',
-          creationParams: {
-            'selectedIndex': widget.selectedIndex,
-            'isMitsuri': widget.theme.isMitsuri,
-            'isLight': widget.theme.isLight,
-            'primary': widget.theme.primary.toARGB32(),
-            'muted': widget.theme.muted.toARGB32(),
-          },
-          creationParamsCodec: const StandardMessageCodec(),
-          onPlatformViewCreated: (_) async {
-            await _applyNativeTheme();
-          },
-        ),
+    return SizedBox(
+      height: dockHeight + characterClearance,
+      child: UiKitView(
+        viewType: 'zhuying/native-glass-dock',
+        creationParams: {
+          'selectedIndex': widget.selectedIndex,
+          'isMitsuri': widget.theme.isMitsuri,
+          'isLight': widget.theme.isLight,
+          'primary': widget.theme.primary.toARGB32(),
+          'muted': widget.theme.muted.toARGB32(),
+        },
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: (_) async {
+          await _applyNativeTheme();
+        },
       ),
     );
   }
@@ -2491,8 +2483,8 @@ class _HeroFeature extends StatelessWidget {
                         icon: Icon(Icons.play_arrow_rounded, size: 19),
                         label: const Text('查看影片'),
                         style: FilledButton.styleFrom(
-                          backgroundColor: ZhuyingColors.amber,
-                          foregroundColor: const Color(0xFF211A10),
+                          backgroundColor: context.zhuyingTheme.action,
+                          foregroundColor: context.zhuyingTheme.onAction,
                           padding: EdgeInsets.symmetric(
                             horizontal: 16,
                             vertical: 11,
